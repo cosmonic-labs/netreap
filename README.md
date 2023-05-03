@@ -207,7 +207,7 @@ Cilium CNI is available.
 | ---------------------- | --------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `--cilium-cidr`, `-c`, | `NETREAP_CILIUM_CIDR` | None, this is a required flag | The CIDR block of the address space used by Cilium. This allows netreap to identify if a job is a Cilium one. |
 | `--debug`              | `NETREAP_DEBUG`       | `false`                       | Turns on debug logging                                                                                        |
-| `--policy-key`         | `NETREAP_POLICY_KEY`  | `netreap.io/netreap/policy`   | Consul key that Netreap watches for changes to the Cilium policy JSON value |
+| `--policy-key`         | `NETREAP_POLICY_KEY`  | `netreap.io/policy`           | Consul key that Netreap watches for changes to the Cilium policy JSON value |
 | `--exclude-tags`       | `NETREAP_EXCLUDE_TAG` | None                          | List of Consul service tags to use as a filter to exclude from Netreap |
 
 Please note that to configure the Nomad and Consul clients that Netreap uses,
@@ -235,7 +235,7 @@ Whenever you want to update policies in your cluster, simply set the key in
 Consul:
 
 ```bash
-consul kv put netreap.io/netreap/policy @policy.json
+consul kv put netreap.io/policy @policy.json
 ```
 
 Netreap automatically picks up any updates to the value and updates the policy
