@@ -120,7 +120,7 @@ it does or if you want to change Docker's IP range, take a look at the
 ```
 
 You will then need to make sure you have a CNI configuration for Cilium in
-`/opt/cni/conf.d` named `cilium.conflist`:
+`/opt/cni/config` named `cilium.conflist`:
 
 ```json
 {
