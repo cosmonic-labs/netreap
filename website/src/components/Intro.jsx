@@ -39,13 +39,13 @@ export function Intro() {
           <Logo className="inline-block h-8 w-auto" />
         </Link>
       </div>
-      <p className="mt-4 text-sm/6 text-gray-300">
+      <p className="mt-4 text-base/7 text-gray-300">
         Netreap is a tool to run Cilium with a Nomad cluster, similar to the functionality of the{' '}
         <Link href="https://docs.cilium.io/en/v1.13/internals/cilium_operator/#cilium-operator-internals">
           <span className="text-emerald-300">Cilium Operator. </span>
         </Link>
         It was originally designed just to reap orphaned{' '}
-        <Link href="https://docs.cilium.io/en/v1.13/concepts/terminology/#endpoints">
+        <Link href="https://docs.cilium.io/en/v1.13/gettingstarted/terminology/#endpoints">
           <span className="text-emerald-300">Cilium Endpoints </span>
         </Link>
         leading to the name Netreap. But we loved the name so much we kept it even though it does
