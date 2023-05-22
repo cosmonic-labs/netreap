@@ -1,0 +1,19 @@
+import { SparkleIcon } from '@/components/SparkleIcon'
+import { generateRssFeed } from '@/lib/generateRssFeed'
+
+export async function getStaticProps() {
+  if (process.env.NODE_ENV === 'production') {
+    await generateRssFeed()
+  }
+  return { props: {} }
+}
+
+---
+
+![](@/images/cilium_endpoints.png)
+## Netreap v0.1.0 {{  date: '2023-03-03T00:00Z' }}
+Our initial open source release! We've been running Netreap internally at
+Cosmonic since September, 2022 and we're excited to share it with the Cilium
+and Nomad communities.
+
+Head over to [the project repository](https://github.com/cosmonic/netreap) to learn more.
