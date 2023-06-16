@@ -191,7 +191,7 @@ job "netreap" {
       }
 
       config {
-        image        = "ghcr.io/cosmonic/netreap:0.1.0"
+        image        = "ghcr.io/cosmonic/netreap:0.1.2"
         network_mode = "host"
 
         # You must be able to mount volumes from the host system so that
