@@ -6,7 +6,7 @@ Netreap is a non-Kubernetes-based tool for handling Cilium across a cluster,
 similar to the functionality of [Cilium
 Operator](https://docs.cilium.io/en/v1.13/internals/cilium_operator/#cilium-operator-internals).
 It was originally designed just to reap orphaned Cilium
-[Endpoints](https://docs.cilium.io/en/v1.13/concepts/terminology/#endpoints),
+[Endpoints](https://docs.cilium.io/en/v1.13/gettingstarted/terminology/#endpoints),
 hence the name of `Netreap`. But we loved the name so much we kept it even
 though it does more than reaping.
 
