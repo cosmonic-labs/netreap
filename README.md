@@ -102,6 +102,14 @@ Cilium uses forked versions of some key libraries and needs access to a C
 compiler. We found that it is easier to just the container instead of
 installing all of Cilium's dependencies.
 
+If you use Consul ACLs, then you will need to add a token to the `Service`
+block in the systemd unit so that Cilium can connect to the cluster.
+
+```systemd
+[Service]
+Environment="CONSUL_HTTP_TOKEN=..."
+```
+
 #### Configuring the CNI
 
 The big thing to note is that you need to make sure that the IP CIDR you use
@@ -195,6 +203,7 @@ job "netreap" {
           "/var/run/cilium:/var/run/cilium"
         ]
       }
+
     }
   }
 }
@@ -202,6 +211,25 @@ job "netreap" {
 
 The job constraint ensures that Netreap will only run on nodes where the
 Cilium CNI is available.
+
+If you use Nomad or Consul ACLs then you will need to set them in the Netreap
+job, ex.
+
+```hcl
+
+      template {
+        destination = "secrets/file.env"
+        env         = true
+        change_mode = "restart"
+        data        = <<EOT
+CONSUL_HTTP_TOKEN="..."
+NOMAD_TOKEN="..."
+EOT
+      }
+```
+
+Note that all environment variables used to configure the Consul and Nomad API
+clients are available to Netreap.
 
 ### Configuring
 
