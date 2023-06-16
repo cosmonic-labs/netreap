@@ -200,7 +200,7 @@ func (e *EndpointReaper) reconcile() error {
 		}
 	}
 
-	zap.S().Debug("Finished generating current IP list. Fetching endpoints from cilium", "ip_list", ipMap)
+	zap.S().Debugw("Finished generating current IP list. Fetching endpoints from cilium", "ip_list", ipMap)
 	endpoints, err := e.cilium.EndpointList()
 	if err != nil {
 		return fmt.Errorf("unable to list current cilium endpoints: %s", err)
@@ -262,7 +262,7 @@ func (e *EndpointReaper) reconcile() error {
 		}
 	}
 
-	zap.S().Debug("Finished reconciliation", "num_errors", deleteErrors)
+	zap.S().Debugw("Finished reconciliation", "num_errors", deleteErrors)
 	e.numToReap = deleteErrors
 
 	return nil
@@ -279,7 +279,7 @@ func (e *EndpointReaper) handleJobDelete(event nomad_api.Event) error {
 	// fetch the associated service from consul once the job is deleted, so we can't check if it was
 	// a cilium job
 	e.numToReap++
-	zap.S().Debug("Got deleted job. Increasing reaper counter", "count", e.numToReap, "job_id", jobID)
+	zap.S().Debugw("Got deleted job. Increasing reaper counter", "count", e.numToReap, "job_id", jobID)
 	return nil
 }
 
@@ -347,13 +347,13 @@ func (e *EndpointReaper) handleJobCreate(event nomad_api.Event) {
 			addr := net.ParseIP(stringAddr)
 			if !e.cidr.Contains(addr) {
 				// Skip if this isn't a cilium service
-				zap.S().Debug("New job is not a cilium service. Skipping further steps", "job_id", jobID)
+				zap.S().Debugw("New job is not a cilium service. Skipping further steps", "job_id", jobID)
 				return
 			}
 
 			// TODO(thomastaylor312): We might want to see if there is a more efficient way than querying
 			// all endpoints and looping
-			zap.S().Debug("Finding related cilium endpoint for job", "job_id", jobID)
+			zap.S().Debugw("Finding related cilium endpoint for job", "job_id", jobID)
 			endpoints, err := e.cilium.EndpointList()
 			if err != nil {
 				zap.S().Errorw("Unable to fetch current list of cilium endpoints", "error", err)

@@ -50,7 +50,7 @@ func (n *NodeReaper) Run() (<-chan bool, error) {
 		// Leader election
 		election, err := elector.New(n.ctx, n.consul)
 		if err != nil {
-			zap.S().Errorw("Unable to set up leader election for node reaper", err)
+			zap.S().Errorw("Unable to set up leader election for node reaper", "error", err)
 			return
 		}
 		zap.S().Info("Waiting for leader election")
@@ -116,7 +116,7 @@ func (n *NodeReaper) reconcile() error {
 	for _, node := range nodes {
 		nodeMap[node.Name] = struct{}{}
 	}
-	zap.S().Debug("Finished constructing list of all nodes", "nodes", nodeMap)
+	zap.S().Debugw("Finished constructing list of all nodes", "nodes", nodeMap)
 	kv := n.consul.KV()
 	zap.S().Debug("Fetching cilium nodes from consul")
 	rawNodes, _, err := kv.List(nodePrefix, nil)
@@ -131,7 +131,7 @@ func (n *NodeReaper) reconcile() error {
 			return fmt.Errorf("invalid data found when parsing Cilium node: %s", err)
 		}
 		if _, ok := nodeMap[node.Name]; !ok {
-			zap.S().Debug("Node no longer exists in nomad, deleting", "node", node.Name)
+			zap.S().Debugw("Node no longer exists in nomad, deleting", "node", node.Name)
 			// NOTE: This delete only works to cleanup nodes where the node has stopped along with
 			// the cilium agent. Otherwise cilium will just recreate this entry
 			if _, err := kv.Delete(pair.Key, nil); err != nil {
