@@ -2,6 +2,7 @@ FROM golang:1.20 as builder
 WORKDIR /netreap
 COPY . /netreap
 ARG VERSION
+ENV CGO_ENABLED 0
 RUN go build -ldflags "-s -w -X 'main.Version=$VERSION'"
 
 FROM gcr.io/distroless/base-debian11
