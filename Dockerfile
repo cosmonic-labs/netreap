@@ -1,10 +1,12 @@
-FROM golang:1.20 as builder
+FROM --platform=${BUILDPLATFORM} golang:1.20 as builder
 WORKDIR /netreap
+ENV CGO_ENABLED 0
 COPY . /netreap
 ARG VERSION
-ENV CGO_ENABLED 0
-RUN go build -ldflags "-s -w -X 'main.Version=$VERSION'"
+ARG TARGETOS
+ARG TARGETARCH
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w -X 'main.Version=$VERSION'"
 
-FROM gcr.io/distroless/base-debian11
-COPY --from=builder /netreap/netreap /usr/bin/netreap
-ENTRYPOINT ["/usr/bin/netreap"]
+FROM scratch AS bin
+COPY --from=builder /netreap/netreap /netreap
+ENTRYPOINT ["/netreap"]
