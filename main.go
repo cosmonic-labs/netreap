@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 
@@ -96,11 +95,6 @@ func main() {
 }
 
 func run(conf config) error {
-	_, net, err := net.ParseCIDR(conf.net)
-	if err != nil {
-		return fmt.Errorf("unable to parse Cilium CIDR block: %s", err)
-	}
-
 	// Step 0: Construct clients
 	consul_client, err := consul_api.NewClient(consul_api.DefaultConfig())
 	if err != nil {
@@ -133,12 +127,12 @@ func run(conf config) error {
 	}
 
 	zap.S().Debug("Starting endpoint reaper")
-	endpoint_reaper, err := reapers.NewEndpointReaper(ctx, nomad_client, consul_client, net, conf.excludeTags)
+	endpoint_reaper, err := reapers.NewEndpointReaper(nomad_client)
 	if err != nil {
 		return err
 	}
 
-	endpointFailChan, err := endpoint_reaper.Run()
+	endpointFailChan, err := endpoint_reaper.Run(ctx)
 	if err != nil {
 		return fmt.Errorf("unable to start endpoint reaper: %s", err)
 	}
