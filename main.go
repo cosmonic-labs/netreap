@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 
+	cilium_client "github.com/cilium/cilium/pkg/client"
 	consul_api "github.com/hashicorp/consul/api"
 	nomad_api "github.com/hashicorp/nomad/api"
 	"github.com/urfave/cli/v2"
@@ -19,9 +20,7 @@ import (
 var Version = "unreleased"
 
 type config struct {
-	net         string
-	policyKey   string
-	excludeTags []string
+	policyKey string
 }
 
 func main() {
@@ -33,8 +32,6 @@ func main() {
 		log.Fatalf("can't initialize zap logger: %v", err)
 	}
 	defer logger.Sync()
-
-	excludeTags := cli.StringSlice{}
 
 	app := &cli.App{
 		Name:  "netreap",
@@ -48,27 +45,12 @@ func main() {
 				Destination: &debug,
 			},
 			&cli.StringFlag{
-				Name:        "cilium-cidr",
-				Aliases:     []string{"c"},
-				Usage:       "The CIDR block that Cilium addresses belong to. This is used for checking if a service is a Cilium service or not",
-				EnvVars:     []string{"NETREAP_CILIUM_CIDR"},
-				Destination: &conf.net,
-				Required:    true,
-			},
-			&cli.StringFlag{
 				Name:        "policy-key",
 				Aliases:     []string{"k"},
 				Value:       policy.PolicyKeyDefault,
 				Usage:       "Consul key to watch for Cilium policy updates.",
 				EnvVars:     []string{"NETREAP_POLICY_KEY"},
 				Destination: &conf.policyKey,
-			},
-			&cli.StringSliceFlag{
-				Name:        "exclude-tag",
-				Aliases:     []string{"e"},
-				Usage:       "Consul service tags to skip when checking for Cilium-enabled jobs",
-				EnvVars:     []string{"NETREAP_EXCLUDE_TAG"},
-				Destination: &excludeTags,
 			},
 		},
 		Before: func(ctx *cli.Context) error {
@@ -83,7 +65,6 @@ func main() {
 			return nil
 		},
 		Action: func(c *cli.Context) error {
-			conf.excludeTags = excludeTags.Value()
 			return run(conf)
 		},
 		Version: Version,
@@ -99,6 +80,12 @@ func run(conf config) error {
 	consul_client, err := consul_api.NewClient(consul_api.DefaultConfig())
 	if err != nil {
 		return fmt.Errorf("unable to connect to Consul: %s", err)
+	}
+
+	// Looks for the default Cilium socket path or uses the value from CILIUM_SOCK
+	cilium_client, err := cilium_client.NewDefaultClient()
+	if err != nil {
+		return fmt.Errorf("error when connecting to cilium agent: %s", err)
 	}
 
 	// DefaultConfig fetches configuration data from well-known nomad variables (e.g. NOMAD_ADDR,
@@ -127,7 +114,7 @@ func run(conf config) error {
 	}
 
 	zap.S().Debug("Starting endpoint reaper")
-	endpoint_reaper, err := reapers.NewEndpointReaper(nomad_client)
+	endpoint_reaper, err := reapers.NewEndpointReaper(cilium_client, nomad_client.Allocations(), nomad_client.EventStream())
 	if err != nil {
 		return err
 	}

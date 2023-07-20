@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/cilium/cilium/api/v1/models"
-	cilium_client "github.com/cilium/cilium/pkg/client"
 	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
 	nomad_api "github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
@@ -24,21 +23,18 @@ const (
 )
 
 type EndpointReaper struct {
-	nomad  *nomad_api.Client
-	cilium *cilium_client.Client
+	cilium           EndpointUpdater
+	nomadAllocations AllocationInfo
+	nomadEventStream EventStreamer
 }
 
 // NewEndpointReaper creates a new EndpointReaper. This will run an initial reconciliation before
 // returning the reaper
-func NewEndpointReaper(nomad_client *nomad_api.Client) (*EndpointReaper, error) {
-	cilium_client, err := cilium_client.NewDefaultClient()
-	if err != nil {
-		return nil, fmt.Errorf("error when connecting to cilium agent: %s", err)
-	}
-
+func NewEndpointReaper(ciliumClient EndpointUpdater, nomadAllocations AllocationInfo, nomadEventStream EventStreamer) (*EndpointReaper, error) {
 	reaper := EndpointReaper{
-		cilium: cilium_client,
-		nomad:  nomad_client,
+		cilium:           ciliumClient,
+		nomadAllocations: nomadAllocations,
+		nomadEventStream: nomadEventStream,
 	}
 
 	// Do the initial reconciliation loop
@@ -56,9 +52,11 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 
 	// NOTE: Specifying uint max so that it starts from the next available index. If there is a
 	// better way to start from latest index, we can change this
-	eventChan, err := e.nomad.EventStream().Stream(
+	eventChan, err := e.nomadEventStream.Stream(
 		ctx,
-		map[nomad_api.Topic][]string{nomad_api.TopicJob: {}},
+		map[nomad_api.Topic][]string{
+			nomad_api.TopicJob: {},
+		},
 		math.MaxInt64,
 		&nomad_api.QueryOptions{
 			Namespace: "*",
@@ -76,13 +74,16 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 			case <-ctx.Done():
 				zap.L().Info("Context cancelled, shutting down endpoint reaper")
 				return
+
 			case events := <-eventChan:
 				if events.Err != nil {
 					zap.L().Debug("Got error message from node event channel", zap.Error(events.Err))
 					failChan <- true
 					return
 				}
+
 				zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
+
 				for _, event := range events.Events {
 					switch event.Type {
 					case "AllocationUpdated":
@@ -132,7 +133,7 @@ func (e *EndpointReaper) reconcile() error {
 		}
 
 		// Nomad calls the CNI plugin with the allocation ID as the container ID
-		allocation, _, err := e.nomad.Allocations().Info(containerID, &nomad_api.QueryOptions{Namespace: "*"})
+		allocation, _, err := e.nomadAllocations.Info(containerID, &nomad_api.QueryOptions{Namespace: "*"})
 		if err != nil {
 			zap.L().Warn("Couldn't fetch allocation from Nomad",
 				zap.String("container-id", containerID),
@@ -215,7 +216,7 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 
 	if allocation.Job == nil {
 		// Fetch the full allocation since the event didn't have the Job with the metadata
-		allocation, _, err = e.nomad.Allocations().Info(allocation.ID, &nomad_api.QueryOptions{Namespace: allocation.Namespace})
+		allocation, _, err = e.nomadAllocations.Info(allocation.ID, &nomad_api.QueryOptions{Namespace: allocation.Namespace})
 		if err != nil {
 			zap.L().Warn("Couldn't fetch allocation from Nomad",
 				zap.String("event-type", event.Type),
