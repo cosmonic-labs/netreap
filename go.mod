@@ -4,12 +4,11 @@ go 1.20
 
 require (
 	github.com/cilium/cilium v1.13.2
-	github.com/google/uuid v1.3.0
 	github.com/hashicorp/consul/api v1.18.0
-	github.com/hashicorp/nomad/api v0.0.0-20230420161604-206236039ccd
+	github.com/hashicorp/nomad/api v0.0.0-20230719205936-8d2894699319
 	github.com/urfave/cli/v2 v2.11.2
 	go.uber.org/zap v1.23.0
-	golang.org/x/exp v0.0.0-20230108222341-4b8118a2686a
+	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1
 )
 
 require (
@@ -42,8 +41,9 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
+	github.com/google/uuid v1.3.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
-	github.com/hashicorp/cronexpr v1.1.1 // indirect
+	github.com/hashicorp/cronexpr v1.1.2 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-hclog v1.4.0 // indirect
