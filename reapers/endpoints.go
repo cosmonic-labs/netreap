@@ -272,7 +272,7 @@ func (e *EndpointReaper) labelEndpoint(endpointID string, containerID string, co
 		zap.L().Error("Error while patching the endpoint labels of container",
 			zap.String("container-id", containerID),
 			zap.String("endpoint-id", endpointID),
-			zap.Any("labels", labels),
+			zap.Strings("labels", labels),
 			zap.Error(err),
 		)
 	}
