@@ -123,15 +123,6 @@ func (e *EndpointReaper) reconcile() error {
 			continue
 		}
 
-		// https://docs.cilium.io/en/stable/security/policy/lifecycle/#init-identity
-		if !slices.Contains(endpoint.Status.Labels.SecurityRelevant, "reserved:init") {
-			zap.L().Debug("Skipping endpoint that is not awaiting labels",
-				zap.String("container-id", containerID),
-				zap.String("endpoint-id", endpointID),
-			)
-			continue
-		}
-
 		// Nomad calls the CNI plugin with the allocation ID as the container ID
 		allocation, _, err := e.nomadAllocations.Info(containerID, &nomad_api.QueryOptions{Namespace: "*"})
 		if err != nil {
