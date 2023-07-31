@@ -11,7 +11,6 @@ import (
 	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
 	nomad_api "github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 )
 
 const (
