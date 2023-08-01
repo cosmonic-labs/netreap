@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/cilium/cilium/api/v1/models"
 	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
@@ -68,10 +69,20 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 	failChan := make(chan bool, 1)
 
 	go func() {
+		tick := time.NewTicker(time.Hour)
+		defer tick.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				zap.L().Info("Context cancelled, shutting down endpoint reaper")
+				return
+
+			case <-tick.C:
+				zap.L().Info("Periodic reconciliation loop started")
+				if err := e.reconcile(); err != nil {
+					zap.L().Error("Error occurred during reconcilation, will retry next loop", zap.Error(err))
+				}
 				return
 
 			case events := <-eventChan:
