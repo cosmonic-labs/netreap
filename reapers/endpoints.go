@@ -83,7 +83,6 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 				if err := e.reconcile(); err != nil {
 					zap.L().Error("Error occurred during reconcilation, will retry next loop", zap.Error(err))
 				}
-				return
 
 			case events := <-eventChan:
 				if events.Err != nil {
