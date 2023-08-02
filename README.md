@@ -186,10 +186,6 @@ job "netreap" {
     task "netreap" {
       driver = "docker"
 
-      env {
-        NETREAP_CILIUM_CIDR = "172.16.0.0/16"
-      }
-
       config {
         image        = "ghcr.io/cosmonic/netreap:0.1.2"
         network_mode = "host"
@@ -235,15 +231,14 @@ clients are available to Netreap.
 
 | Flag                   | Env Var               | Default                       | Description                                                                                                   |
 | ---------------------- | --------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `--cilium-cidr`, `-c`, | `NETREAP_CILIUM_CIDR` | None, this is a required flag | The CIDR block of the address space used by Cilium. This allows netreap to identify if a job is a Cilium one. |
 | `--debug`              | `NETREAP_DEBUG`       | `false`                       | Turns on debug logging                                                                                        |
 | `--policy-key`         | `NETREAP_POLICY_KEY`  | `netreap.io/policy`           | Consul key that Netreap watches for changes to the Cilium policy JSON value |
-| `--exclude-tags`       | `NETREAP_EXCLUDE_TAG` | None                          | List of Consul service tags to use as a filter to exclude from Netreap |
 
-Please note that to configure the Nomad and Consul clients that Netreap uses,
+Please note that to configure the Nomad, Consul and Cilium clients that Netreap uses,
 we leverage the well defined environment variables for
-[Nomad](https://www.nomadproject.io/docs/commands#environment-variables) and
-[Consul](https://www.consul.io/commands#environment-variables).
+[Nomad](https://www.nomadproject.io/docs/commands#environment-variables),
+[Consul](https://www.consul.io/commands#environment-variables) and
+[Cilium](https://pkg.go.dev/github.com/cilium/cilium/pkg/client#DefaultSockPath).
 
 Right now we only allow connecting to the local Unix socket endpoint for the
 Cilium agent. As we determine how we are going to set things up with Cilium, we

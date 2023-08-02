@@ -8,3 +8,6 @@ docker:
 
 ci:
 	docker buildx build --platform $(platforms) --tag $(repo):$(VERSION) --push .
+
+test:
+	go test -v ./...
