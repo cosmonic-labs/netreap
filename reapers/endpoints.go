@@ -28,15 +28,17 @@ type EndpointReaper struct {
 	cilium           EndpointUpdater
 	nomadAllocations AllocationInfo
 	nomadEventStream EventStreamer
+	nodeID           string
 }
 
 // NewEndpointReaper creates a new EndpointReaper. This will run an initial reconciliation before
 // returning the reaper
-func NewEndpointReaper(ciliumClient EndpointUpdater, nomadAllocations AllocationInfo, nomadEventStream EventStreamer) (*EndpointReaper, error) {
+func NewEndpointReaper(ciliumClient EndpointUpdater, nomadAllocations AllocationInfo, nomadEventStream EventStreamer, nodeID string) (*EndpointReaper, error) {
 	reaper := EndpointReaper{
 		cilium:           ciliumClient,
 		nomadAllocations: nomadAllocations,
 		nomadEventStream: nomadEventStream,
+		nodeID:           nodeID,
 	}
 
 	// Do the initial reconciliation loop
@@ -57,7 +59,7 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 	eventChan, err := e.nomadEventStream.Stream(
 		ctx,
 		map[nomad_api.Topic][]string{
-			nomad_api.TopicJob: {},
+			nomad_api.TopicAllocation: {"*"},
 		},
 		math.MaxInt64,
 		&nomad_api.QueryOptions{
@@ -185,11 +187,33 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 		return
 	}
 
+	if allocation.NodeID != e.nodeID {
+		zap.L().Debug("Allocation is not for this node, ignoring",
+			zap.String("event-type", event.Type),
+			zap.Uint64("event-index", event.Index),
+			zap.String("allocation-node-id", allocation.NodeID),
+			zap.String("container-id", allocation.ID),
+			zap.String("node-id", e.nodeID),
+		)
+		return
+	}
+
 	if allocation.NetworkStatus == nil || allocation.NetworkStatus.Address == "" {
 		zap.L().Debug("Allocation has no IP address, ignoring",
 			zap.String("event-type", event.Type),
 			zap.Uint64("event-index", event.Index),
 			zap.String("container-id", allocation.ID),
+		)
+		return
+	}
+
+	if allocation.ServerTerminalStatus() || allocation.ClientTerminalStatus() {
+		zap.L().Debug("Allocation is terminating, ignoring",
+			zap.String("event-type", event.Type),
+			zap.Uint64("event-index", event.Index),
+			zap.String("container-id", allocation.ID),
+			zap.String("client-status", allocation.ClientStatus),
+			zap.String("desired-status", allocation.DesiredStatus),
 		)
 		return
 	}

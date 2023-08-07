@@ -95,6 +95,21 @@ func run(conf config) error {
 		return fmt.Errorf("unable to connect to Nomad: %s", err)
 	}
 
+	self, err := nomad_client.Agent().Self()
+	if err != nil {
+		return fmt.Errorf("unable to query local agent info: %s", err)
+	}
+
+	clientStats, ok := self.Stats["client"]
+	if !ok {
+		return fmt.Errorf("not running on a client node")
+	}
+
+	nodeID, ok := clientStats["node_id"]
+	if !ok {
+		return fmt.Errorf("unable to get local node ID")
+	}
+
 	// Step 1: Leader election
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -114,7 +129,7 @@ func run(conf config) error {
 	}
 
 	zap.S().Debug("Starting endpoint reaper")
-	endpoint_reaper, err := reapers.NewEndpointReaper(cilium_client, nomad_client.Allocations(), nomad_client.EventStream())
+	endpoint_reaper, err := reapers.NewEndpointReaper(cilium_client, nomad_client.Allocations(), nomad_client.EventStream(), nodeID)
 	if err != nil {
 		return err
 	}
