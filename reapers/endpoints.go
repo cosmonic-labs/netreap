@@ -12,6 +12,8 @@ import (
 	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
 	nomad_api "github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
+
+	backoff "github.com/cenkalti/backoff/v4"
 )
 
 const (
@@ -150,9 +152,7 @@ func (e *EndpointReaper) reconcile() error {
 				zap.Error(err),
 			)
 
-			labels := e.createLabelsForAllocation(allocation)
-
-			e.labelEndpoint(endpointID, allocation.ID, allocation.Name, labels)
+			e.labelEndpoint(endpointID, allocation)
 		} else {
 			zap.L().Debug("Skipping endpoint as allocation not in Nomad",
 				zap.String("container-id", containerID),
@@ -229,12 +229,10 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 		}
 	}
 
-	labels := e.createLabelsForAllocation(allocation)
-
-	e.labelEndpoint(endpoint_id.NewCiliumID(endpoint.ID), allocation.ID, allocation.Name, labels)
+	e.labelEndpoint(endpoint_id.NewCiliumID(endpoint.ID), allocation)
 }
 
-func (e *EndpointReaper) createLabelsForAllocation(allocation *nomad_api.Allocation) models.Labels {
+func (e *EndpointReaper) labelEndpoint(endpointID string, allocation *nomad_api.Allocation) {
 	labels := models.Labels{fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, jobIDLabel, allocation.JobID)}
 	labels = append(labels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, namespaceLabel, allocation.Namespace))
 	labels = append(labels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, taskGroupLabel, allocation.TaskGroup))
@@ -257,23 +255,44 @@ func (e *EndpointReaper) createLabelsForAllocation(allocation *nomad_api.Allocat
 		labels = append(labels, fmt.Sprintf("%s:%s=%s", nomadLabelPrefix, k, v))
 	}
 
-	return labels
-}
-
-func (e *EndpointReaper) labelEndpoint(endpointID string, containerID string, containerName string, labels models.Labels) {
 	ecr := &models.EndpointChangeRequest{
-		ContainerID:   containerID,
-		ContainerName: containerName,
+		ContainerID:   allocation.ID,
+		ContainerName: allocation.Name,
 		Labels:        labels,
 		State:         models.EndpointStateWaitingDashForDashIdentity.Pointer(),
 	}
-	err := e.cilium.EndpointPatch(endpointID, ecr)
-	if err != nil {
-		zap.L().Error("Error while patching the endpoint labels of container",
-			zap.String("container-id", containerID),
-			zap.String("endpoint-id", endpointID),
-			zap.Strings("labels", labels),
-			zap.Error(err),
-		)
+
+	f := func() error {
+		err := e.cilium.EndpointPatch(endpointID, ecr)
+		if err != nil {
+			// The Cilium client endpoints pass errors through Hint() that does fmt.Errorf to all errors without wrapping
+			// so we have to treat them as strings
+			if strings.Contains(err.Error(), "patchEndpointIdTooManyRequests") {
+				zap.L().Warn("Hit Cilium API rate limit, retrying",
+					zap.String("container-id", allocation.ID),
+					zap.String("endpoint-id", endpointID),
+					zap.Strings("labels", labels),
+				)
+				return err
+			}
+
+			return &backoff.PermanentError{
+				Err: err,
+			}
+		}
+		return nil
 	}
+
+	err := backoff.Retry(f, backoff.NewExponentialBackOff())
+	if err != nil {
+		if permanent, ok := err.(*backoff.PermanentError); ok {
+			zap.L().Error("Error while patching the endpoint labels of container",
+				zap.String("container-id", allocation.ID),
+				zap.String("endpoint-id", endpointID),
+				zap.Strings("labels", labels),
+				zap.Error(permanent.Unwrap()),
+			)
+		}
+	}
+
 }
