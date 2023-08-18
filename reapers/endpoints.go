@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -125,13 +125,12 @@ func (e *EndpointReaper) reconcile() error {
 	zap.L().Debug("checking each endpoint", zap.Int("endpoints-total", len(endpoints)))
 
 	for _, endpoint := range endpoints {
-		endpointID := endpoint_id.NewCiliumID(endpoint.ID)
 		containerID := endpoint.Status.ExternalIdentifiers.ContainerID
 
 		// Only managing endpoints with container IDs
 		if containerID == "" {
 			zap.L().Debug("Skipping endpoint that is not associated with a container",
-				zap.String("endpoint-id", endpointID),
+				zap.Int64("endpoint-id", endpoint.ID),
 			)
 			continue
 		}
@@ -141,7 +140,7 @@ func (e *EndpointReaper) reconcile() error {
 		if err != nil {
 			zap.L().Warn("Couldn't fetch allocation from Nomad",
 				zap.String("container-id", containerID),
-				zap.String("endpoint-id", endpointID),
+				zap.Int64("endpoint-id", endpoint.ID),
 				zap.Error(err),
 			)
 			continue
@@ -150,15 +149,15 @@ func (e *EndpointReaper) reconcile() error {
 		if allocation != nil {
 			zap.L().Debug("Patching labels on endpoint",
 				zap.String("container-id", containerID),
-				zap.String("endpoint-id", endpointID),
+				zap.Int64("endpoint-id", endpoint.ID),
 				zap.Error(err),
 			)
 
-			e.labelEndpoint(endpointID, allocation)
+			e.labelEndpoint(endpoint, allocation)
 		} else {
 			zap.L().Debug("Skipping endpoint as allocation not in Nomad",
 				zap.String("container-id", containerID),
-				zap.String("endpoint-id", endpointID),
+				zap.Int64("endpoint-id", endpoint.ID),
 				zap.Error(err),
 			)
 		}
@@ -218,15 +217,12 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 		return
 	}
 
-	allocationIP := net.ParseIP(allocation.NetworkStatus.Address)
-	endpointID := endpoint_id.NewIPPrefixID(allocationIP)
-
-	endpoint, err := e.cilium.EndpointGet(endpointID)
+	endpoint, err := e.cilium.EndpointGet(endpoint_id.NewID(endpoint_id.ContainerIdPrefix, allocation.ID))
 	if err != nil {
 		fields := []zap.Field{zap.String("event-type", event.Type),
 			zap.Uint64("event-index", event.Index),
 			zap.String("container-id", allocation.ID),
-			zap.String("endpoint-id", endpointID),
+			zap.Int64("endpoint-id", endpoint.ID),
 			zap.Error(err),
 		}
 		if strings.Contains(err.Error(), "getEndpointIdNotFound") {
@@ -246,20 +242,38 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 				zap.String("event-type", event.Type),
 				zap.Uint64("event-index", event.Index),
 				zap.String("container-id", allocation.ID),
-				zap.String("endpoint-id", endpointID),
+				zap.Int64("endpoint-id", endpoint.ID),
 				zap.Error(err),
 			)
 			return
 		}
 	}
 
-	e.labelEndpoint(endpoint_id.NewCiliumID(endpoint.ID), allocation)
+	e.labelEndpoint(endpoint, allocation)
 }
 
-func (e *EndpointReaper) labelEndpoint(endpointID string, allocation *nomad_api.Allocation) {
-	labels := models.Labels{fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, jobIDLabel, allocation.JobID)}
-	labels = append(labels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, namespaceLabel, allocation.Namespace))
-	labels = append(labels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, taskGroupLabel, allocation.TaskGroup))
+// stringArrayEqual compares two unordered arrays for equality
+func stringArrayEqual(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	sort.Strings(left)
+	sort.Strings(right)
+
+	for i, v := range left {
+		if v != right[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *nomad_api.Allocation) {
+	newLabels := models.Labels{fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, jobIDLabel, allocation.JobID)}
+	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, namespaceLabel, allocation.Namespace))
+	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, taskGroupLabel, allocation.TaskGroup))
 
 	// Combine the metadata from the job and the task group with the task group taking precedence
 	metadata := make(map[string]string)
@@ -276,26 +290,41 @@ func (e *EndpointReaper) labelEndpoint(endpointID string, allocation *nomad_api.
 	}
 
 	for k, v := range metadata {
-		labels = append(labels, fmt.Sprintf("%s:%s=%s", nomadLabelPrefix, k, v))
+		newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", nomadLabelPrefix, k, v))
+	}
+
+	oldLabels := models.Labels{}
+	oldLabels = append(oldLabels, endpoint.Status.Labels.SecurityRelevant...)
+	oldLabels = append(oldLabels, endpoint.Status.Labels.Derived...)
+
+	if stringArrayEqual(oldLabels, newLabels) {
+		zap.L().Debug("Labels unchanged so not patching endpoint",
+			zap.String("container-id", allocation.ID),
+			zap.Int64("endpoint-id", endpoint.ID),
+			zap.Strings("new-labels", newLabels),
+			zap.Strings("old-labels", oldLabels),
+		)
+
+		return
 	}
 
 	ecr := &models.EndpointChangeRequest{
 		ContainerID:   allocation.ID,
 		ContainerName: allocation.Name,
-		Labels:        labels,
+		Labels:        newLabels,
 		State:         models.EndpointStateWaitingDashForDashIdentity.Pointer(),
 	}
 
 	f := func() error {
-		err := e.cilium.EndpointPatch(endpointID, ecr)
+		err := e.cilium.EndpointPatch(endpoint_id.NewCiliumID(endpoint.ID), ecr)
 		if err != nil {
 			// The Cilium client endpoints pass errors through Hint() that does fmt.Errorf to all errors without wrapping
 			// so we have to treat them as strings
 			if strings.Contains(err.Error(), "patchEndpointIdTooManyRequests") {
 				zap.L().Warn("Hit Cilium API rate limit, retrying",
 					zap.String("container-id", allocation.ID),
-					zap.String("endpoint-id", endpointID),
-					zap.Strings("labels", labels),
+					zap.Int64("endpoint-id", endpoint.ID),
+					zap.Strings("labels", newLabels),
 				)
 				return err
 			}
@@ -312,8 +341,8 @@ func (e *EndpointReaper) labelEndpoint(endpointID string, allocation *nomad_api.
 		if permanent, ok := err.(*backoff.PermanentError); ok {
 			zap.L().Error("Error while patching the endpoint labels of container",
 				zap.String("container-id", allocation.ID),
-				zap.String("endpoint-id", endpointID),
-				zap.Strings("labels", labels),
+				zap.Int64("endpoint-id", endpoint.ID),
+				zap.Strings("labels", newLabels),
 				zap.Error(permanent.Unwrap()),
 			)
 		}
