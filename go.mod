@@ -3,6 +3,7 @@ module github.com/cosmonic/netreap
 go 1.20
 
 require (
+	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/cilium/cilium v1.13.5
 	github.com/hashicorp/consul/api v1.18.0
 	github.com/hashicorp/nomad/api v0.0.0-20230719205936-8d2894699319
