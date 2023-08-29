@@ -140,7 +140,7 @@ func TestEndpointReconcile(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			reaper, err := NewEndpointReaper(tt.cilium, tt.nomadAllocations, nil)
+			reaper, err := NewEndpointReaper(tt.cilium, tt.nomadAllocations, nil, "")
 			if err != nil {
 				t.Fatalf("unexpected error creating poller %v", err)
 			}
