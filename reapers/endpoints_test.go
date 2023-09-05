@@ -1,19 +1,20 @@
 package reapers
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	"github.com/cilium/cilium/api/v1/models"
-	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
-	nomad_api "github.com/hashicorp/nomad/api"
+	"github.com/cilium/cilium/pkg/endpoint/id"
+	"github.com/hashicorp/nomad/api"
 )
 
 type allocationInfoMock struct {
-	infoFn func(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error)
+	infoFn func(allocID string, q *api.QueryOptions) (*api.Allocation, *api.QueryMeta, error)
 }
 
-func (p *allocationInfoMock) Info(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error) {
+func (p *allocationInfoMock) Info(allocID string, q *api.QueryOptions) (*api.Allocation, *api.QueryMeta, error) {
 	if p != nil && p.infoFn != nil {
 		return p.infoFn(allocID, q)
 	}
@@ -59,12 +60,12 @@ func TestEndpointReconcile(t *testing.T) {
 			},
 		},
 	}
-	allocationOne := &nomad_api.Allocation{
+	allocationOne := &api.Allocation{
 		ID:        "containerID",
 		JobID:     "jobID",
 		Namespace: "namespace",
 		TaskGroup: "taskGroup",
-		Job: &nomad_api.Job{
+		Job: &api.Job{
 			Meta: map[string]string{},
 		},
 	}
@@ -92,7 +93,7 @@ func TestEndpointReconcile(t *testing.T) {
 				},
 			},
 			&allocationInfoMock{
-				infoFn: func(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error) {
+				infoFn: func(allocID string, q *api.QueryOptions) (*api.Allocation, *api.QueryMeta, error) {
 					t.Fatalf("unexpected call to allocation info")
 					return nil, nil, nil
 				},
@@ -105,12 +106,12 @@ func TestEndpointReconcile(t *testing.T) {
 				endpointListFn: func() ([]*models.Endpoint, error) {
 					return []*models.Endpoint{endpointOne}, nil
 				},
-				endpointPatchFn: func(id string, ep *models.EndpointChangeRequest) error {
-					expectedID := endpoint_id.NewCiliumID(endpointOne.ID)
+				endpointPatchFn: func(endpointID string, ep *models.EndpointChangeRequest) error {
+					expectedID := id.NewCiliumID(endpointOne.ID)
 					expectedContainerID := endpointOne.Status.ExternalIdentifiers.ContainerID
 
-					if id != expectedID {
-						t.Errorf("wrong endpoint ID passed, expected %v, got %v", expectedID, id)
+					if endpointID != expectedID {
+						t.Errorf("wrong endpoint ID passed, expected %v, got %v", expectedID, endpointID)
 					}
 
 					if ep.ContainerID != expectedContainerID {
@@ -125,7 +126,7 @@ func TestEndpointReconcile(t *testing.T) {
 				},
 			},
 			&allocationInfoMock{
-				infoFn: func(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error) {
+				infoFn: func(allocID string, q *api.QueryOptions) (*api.Allocation, *api.QueryMeta, error) {
 					expectedContainerID := endpointOne.Status.ExternalIdentifiers.ContainerID
 					if allocID != expectedContainerID {
 						t.Errorf("wrong container ID passed, expected %v, got %v", expectedContainerID, allocID)
@@ -145,7 +146,7 @@ func TestEndpointReconcile(t *testing.T) {
 				t.Fatalf("unexpected error creating poller %v", err)
 			}
 
-			err = reaper.reconcile()
+			err = reaper.reconcile(context.TODO())
 
 			if tt.shouldErr && err == nil {
 				t.Error("expected error but got <nil>")

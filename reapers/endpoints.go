@@ -9,19 +9,12 @@ import (
 	"time"
 
 	"github.com/cilium/cilium/api/v1/models"
-	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
-	nomad_api "github.com/hashicorp/nomad/api"
+	"github.com/cilium/cilium/pkg/endpoint/id"
+	"github.com/cosmonic/netreap/internal/netreap"
+	"github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
 
 	backoff "github.com/cenkalti/backoff/v4"
-)
-
-const (
-	netreapLabelPrefix = "netreap"
-	nomadLabelPrefix   = "nomad"
-	jobIDLabel         = "nomad.job_id"
-	taskGroupLabel     = "nomad.task_group_id"
-	namespaceLabel     = "nomad.namespace"
 )
 
 type EndpointReaper struct {
@@ -41,79 +34,74 @@ func NewEndpointReaper(ciliumClient EndpointUpdater, nomadAllocations Allocation
 		nodeID:           nodeID,
 	}
 
-	// Do the initial reconciliation loop
-	if err := reaper.reconcile(); err != nil {
-		return nil, fmt.Errorf("unable to perform initial reconciliation: %s", err)
-	}
-
 	return &reaper, nil
 }
 
 // Run the reaper until the context given in the contructor is cancelled. This function is non
 // blocking and will only return errors if something occurs during startup
 // return a channel to notify of consul client failures
-func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
+func (e *EndpointReaper) Run(ctx context.Context) error {
+	// Do the initial reconciliation loop
+	if err := e.reconcile(ctx); err != nil {
+		return fmt.Errorf("unable to perform initial reconciliation: %s", err)
+	}
 
 	// NOTE: Specifying uint max so that it starts from the next available index. If there is a
 	// better way to start from latest index, we can change this
+	queryOptions := &api.QueryOptions{Namespace: "*"}
 	eventChan, err := e.nomadEventStream.Stream(
 		ctx,
-		map[nomad_api.Topic][]string{
-			nomad_api.TopicAllocation: {"*"},
+		map[api.Topic][]string{
+			api.TopicAllocation: {"*"},
 		},
 		math.MaxInt64,
-		&nomad_api.QueryOptions{
-			Namespace: "*",
-		},
+		queryOptions.WithContext(ctx),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("error when starting node event stream: %s", err)
+		return fmt.Errorf("error when starting node event stream: %s", err)
 	}
 
-	failChan := make(chan bool, 1)
+	tick := time.NewTicker(time.Hour)
+	defer tick.Stop()
 
-	go func() {
-		tick := time.NewTicker(time.Hour)
-		defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			zap.L().Info("Context cancelled, shutting down endpoint reaper")
+			return ctx.Err()
 
-		for {
-			select {
-			case <-ctx.Done():
-				zap.L().Info("Context cancelled, shutting down endpoint reaper")
-				return
+		case <-tick.C:
+			zap.L().Info("Periodic reconciliation loop started")
+			if err := e.reconcile(ctx); err != nil {
+				zap.L().Error("Error occurred during reconcilation, will retry next loop", zap.Error(err))
+			}
 
-			case <-tick.C:
-				zap.L().Info("Periodic reconciliation loop started")
-				if err := e.reconcile(); err != nil {
-					zap.L().Error("Error occurred during reconcilation, will retry next loop", zap.Error(err))
-				}
+		case events := <-eventChan:
+			if events.Err != nil {
+				zap.L().Debug("Got error message from allocation event channel", zap.Error(events.Err))
+				return events.Err
+			}
 
-			case events := <-eventChan:
-				if events.Err != nil {
-					zap.L().Debug("Got error message from node event channel", zap.Error(events.Err))
-					failChan <- true
-					return
-				}
+			if events.IsHeartbeat() {
+				continue
+			}
 
-				zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
+			zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
 
-				for _, event := range events.Events {
-					switch event.Type {
-					case "AllocationUpdated":
-						go e.handleAllocationUpdated(event)
-					default:
-						zap.L().Debug("Ignoring unhandled event from Allocation topic", zap.String("event-type", event.Type))
-						continue
-					}
+			for _, event := range events.Events {
+				switch event.Type {
+				case "AllocationUpdated":
+					go e.handleAllocationUpdated(ctx, event)
+				default:
+					zap.L().Debug("Ignoring unhandled event from Allocation topic", zap.String("event-type", event.Type))
+					continue
 				}
 			}
 		}
-	}()
-
-	return failChan, nil
+	}
 }
 
-func (e *EndpointReaper) reconcile() error {
+func (e *EndpointReaper) reconcile(ctx context.Context) error {
 	zap.L().Debug("Starting reconciliation")
 
 	// Get current endpoints list
@@ -125,41 +113,34 @@ func (e *EndpointReaper) reconcile() error {
 	zap.L().Debug("checking each endpoint", zap.Int("endpoints-total", len(endpoints)))
 
 	for _, endpoint := range endpoints {
-		containerID := endpoint.Status.ExternalIdentifiers.ContainerID
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 
-		// Only managing endpoints with container IDs
-		if containerID == "" {
-			zap.L().Debug("Skipping endpoint that is not associated with a container",
-				zap.Int64("endpoint-id", endpoint.ID),
-			)
-			continue
-		}
+		default:
+			containerID := endpoint.Status.ExternalIdentifiers.ContainerID
 
-		// Nomad calls the CNI plugin with the allocation ID as the container ID
-		allocation, _, err := e.nomadAllocations.Info(containerID, &nomad_api.QueryOptions{Namespace: "*"})
-		if err != nil {
-			zap.L().Warn("Couldn't fetch allocation from Nomad",
-				zap.String("container-id", containerID),
-				zap.Int64("endpoint-id", endpoint.ID),
-				zap.Error(err),
-			)
-			continue
-		}
+			// Only managing endpoints with container IDs
+			if containerID == "" {
+				zap.L().Debug("Skipping endpoint that is not associated with a container",
+					zap.Int64("endpoint-id", endpoint.ID),
+				)
+				continue
+			}
 
-		if allocation != nil {
-			zap.L().Debug("Patching labels on endpoint",
-				zap.String("container-id", containerID),
-				zap.Int64("endpoint-id", endpoint.ID),
-				zap.Error(err),
-			)
+			// Nomad calls the CNI plugin with the allocation ID as the container ID
+			queryOptions := &api.QueryOptions{Namespace: "*"}
+			allocation, _, err := e.nomadAllocations.Info(containerID, queryOptions.WithContext(ctx))
+			if allocation == nil || err != nil {
+				zap.L().Warn("Couldn't fetch allocation from Nomad",
+					zap.String("container-id", containerID),
+					zap.Int64("endpoint-id", endpoint.ID),
+					zap.Error(err),
+				)
+				continue
+			}
 
 			e.labelEndpoint(endpoint, allocation)
-		} else {
-			zap.L().Debug("Skipping endpoint as allocation not in Nomad",
-				zap.String("container-id", containerID),
-				zap.Int64("endpoint-id", endpoint.ID),
-				zap.Error(err),
-			)
 		}
 	}
 
@@ -168,7 +149,7 @@ func (e *EndpointReaper) reconcile() error {
 	return nil
 }
 
-func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
+func (e *EndpointReaper) handleAllocationUpdated(ctx context.Context, event api.Event) {
 	allocation, err := event.Allocation()
 	if err != nil {
 		zap.L().Debug("Unable to deserialize Allocation",
@@ -217,7 +198,7 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 		return
 	}
 
-	endpoint, err := e.cilium.EndpointGet(endpoint_id.NewID(endpoint_id.ContainerIdPrefix, allocation.ID))
+	endpoint, err := e.cilium.EndpointGet(id.NewCNIAttachmentID(allocation.ID, allocation.NetworkStatus.InterfaceName))
 	if err != nil {
 		fields := []zap.Field{zap.String("event-type", event.Type),
 			zap.Uint64("event-index", event.Index),
@@ -236,7 +217,8 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 
 	if allocation.Job == nil {
 		// Fetch the full allocation since the event didn't have the Job with the metadata
-		allocation, _, err = e.nomadAllocations.Info(allocation.ID, &nomad_api.QueryOptions{Namespace: allocation.Namespace})
+		queryOptions := &api.QueryOptions{Namespace: allocation.Namespace}
+		allocation, _, err = e.nomadAllocations.Info(allocation.ID, queryOptions.WithContext(ctx))
 		if err != nil {
 			zap.L().Warn("Couldn't fetch allocation from Nomad",
 				zap.String("event-type", event.Type),
@@ -270,10 +252,10 @@ func stringArrayEqual(left []string, right []string) bool {
 	return true
 }
 
-func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *nomad_api.Allocation) {
-	newLabels := models.Labels{fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, jobIDLabel, allocation.JobID)}
-	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, namespaceLabel, allocation.Namespace))
-	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, taskGroupLabel, allocation.TaskGroup))
+func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *api.Allocation) {
+	newLabels := models.Labels{fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadJobID, allocation.JobID)}
+	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadNamespace, allocation.Namespace))
+	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadTaskGroupID, allocation.TaskGroup))
 
 	// Combine the metadata from the job and the task group with the task group taking precedence
 	metadata := make(map[string]string)
@@ -290,7 +272,7 @@ func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *no
 	}
 
 	for k, v := range metadata {
-		newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", nomadLabelPrefix, k, v))
+		newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNomad, k, v))
 	}
 
 	oldLabels := models.Labels{}
@@ -308,15 +290,23 @@ func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *no
 		return
 	}
 
+	zap.L().Info("Patching labels on endpoint",
+		zap.String("container-id", allocation.ID),
+		zap.Int64("endpoint-id", endpoint.ID),
+		zap.Strings("new-labels", newLabels),
+		zap.Strings("old-labels", oldLabels),
+	)
+
 	ecr := &models.EndpointChangeRequest{
-		ContainerID:   allocation.ID,
-		ContainerName: allocation.Name,
-		Labels:        newLabels,
-		State:         models.EndpointStateWaitingDashForDashIdentity.Pointer(),
+		ContainerID:              allocation.ID,
+		ContainerName:            allocation.Name,
+		Labels:                   newLabels,
+		State:                    models.EndpointStateWaitingDashForDashIdentity.Pointer(),
+		DisableLegacyIdentifiers: true,
 	}
 
 	f := func() error {
-		err := e.cilium.EndpointPatch(endpoint_id.NewCiliumID(endpoint.ID), ecr)
+		err := e.cilium.EndpointPatch(id.NewCiliumID(endpoint.ID), ecr)
 		if err != nil {
 			// The Cilium client endpoints pass errors through Hint() that does fmt.Errorf to all errors without wrapping
 			// so we have to treat them as strings

@@ -1,4 +1,4 @@
-FROM golang:1.20-bullseye as builder
+FROM golang:1.21-bullseye as builder
 WORKDIR /netreap
 COPY go.mod go.sum /netreap/
 RUN go mod download
