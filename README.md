@@ -29,12 +29,17 @@ that Netreap uses leader election, so multiple copies can (and should) be run.
 
 #### Requirements
 
-* A Consul cluster
-* A running Nomad cluster configured to use Consul service discovery
+* A Consul cluster or server
+* A running Nomad cluster
 * Cilium 1.12.x or 1.13.x
   * You will also need to install the [CNI
     plugins](https://github.com/containernetworking/plugins/releases/tag/v1.2.0)
     alongside Cilium
+
+As of v0.2.0 Consul is no longer required for endpoint reconciliation in
+Cilium. You may chose to continue to use Consul as Cilum's KV store, but you
+can also use etcd. The install guide assumes you want to use Consul as the
+kvstore, since you will need it to distribute Cilium policies.
 
 #### Running Cilium
 
@@ -187,7 +192,7 @@ job "netreap" {
       driver = "docker"
 
       config {
-        image        = "ghcr.io/cosmonic/netreap:0.1.2"
+        image        = "ghcr.io/cosmonic/netreap:0.2.0"
         network_mode = "host"
 
         # You must be able to mount volumes from the host system so that
