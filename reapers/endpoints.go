@@ -93,11 +93,11 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 				if events.Err != nil {
 					if _, ok := err.(*json.SyntaxError); ok {
 						zap.L().Debug("Got incorrect event from nomad", zap.Error(events.Err))
-						continue
+					} else {
+						zap.L().Debug("Got error message from node event channel", zap.Error(events.Err))
+						failChan <- true
+						return
 					}
-					zap.L().Debug("Got error message from node event channel", zap.Error(events.Err))
-					failChan <- true
-					return
 				}
 
 				zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
