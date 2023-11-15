@@ -2,6 +2,7 @@ package reapers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -90,6 +91,10 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 
 			case events := <-eventChan:
 				if events.Err != nil {
+					if _, ok := err.(*json.SyntaxError); ok {
+						zap.L().Debug("Got incorrect event from nomad", zap.Error(events.Err))
+						continue
+					}
 					zap.L().Debug("Got error message from node event channel", zap.Error(events.Err))
 					failChan <- true
 					return
