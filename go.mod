@@ -6,6 +6,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/cilium/cilium v1.13.5
 	github.com/hashicorp/consul/api v1.18.0
+	github.com/hashicorp/go-hclog v1.5.0
 	github.com/hashicorp/nomad/api v0.0.0-20230719205936-8d2894699319
 	github.com/urfave/cli/v2 v2.11.2
 	go.uber.org/zap v1.23.0
@@ -46,7 +47,6 @@ require (
 	github.com/hashicorp/cronexpr v1.1.2 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
-	github.com/hashicorp/go-hclog v1.4.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/go-msgpack v1.1.5 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect

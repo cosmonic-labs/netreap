@@ -9,6 +9,7 @@ import (
 	ciliumClient "github.com/cilium/cilium/pkg/client"
 	consulApi "github.com/hashicorp/consul/api"
 	consulWatch "github.com/hashicorp/consul/api/watch"
+	"github.com/hashicorp/go-hclog"
 	"go.uber.org/zap"
 )
 
@@ -99,8 +100,10 @@ func (p *Poller) Run(ctx context.Context) error {
 	}
 
 	go func() {
-		//lint:ignore SA1019 we need to fix this, but it requires adapting the zap logger
-		err := wp.RunWithClientAndLogger(p.consulClient, l)
+		hclogger := hclog.FromStandardLogger(l, &hclog.LoggerOptions{
+			Name: "policy_poller",
+		})
+		err := wp.RunWithClientAndHclog(p.consulClient, hclogger)
 		if err != nil {
 			zap.S().Error("error running watcher", zap.Error(err))
 		}
