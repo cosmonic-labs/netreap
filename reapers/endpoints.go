@@ -10,18 +10,11 @@ import (
 
 	"github.com/cilium/cilium/api/v1/models"
 	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
+	"github.com/cosmonic/netreap/internal/netreap"
 	nomad_api "github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
 
 	backoff "github.com/cenkalti/backoff/v4"
-)
-
-const (
-	netreapLabelPrefix = "netreap"
-	nomadLabelPrefix   = "nomad"
-	jobIDLabel         = "nomad.job_id"
-	taskGroupLabel     = "nomad.task_group_id"
-	namespaceLabel     = "nomad.namespace"
 )
 
 type EndpointReaper struct {
@@ -271,9 +264,9 @@ func stringArrayEqual(left []string, right []string) bool {
 }
 
 func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *nomad_api.Allocation) {
-	newLabels := models.Labels{fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, jobIDLabel, allocation.JobID)}
-	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, namespaceLabel, allocation.Namespace))
-	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreapLabelPrefix, taskGroupLabel, allocation.TaskGroup))
+	newLabels := models.Labels{fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadJobID, allocation.JobID)}
+	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadNamespace, allocation.Namespace))
+	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadTaskGroupID, allocation.TaskGroup))
 
 	// Combine the metadata from the job and the task group with the task group taking precedence
 	metadata := make(map[string]string)
@@ -290,7 +283,7 @@ func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *no
 	}
 
 	for k, v := range metadata {
-		newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", nomadLabelPrefix, k, v))
+		newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNomad, k, v))
 	}
 
 	oldLabels := models.Labels{}
@@ -307,6 +300,13 @@ func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *no
 
 		return
 	}
+
+	zap.L().Info("Patching labels on endpoint",
+		zap.String("container-id", allocation.ID),
+		zap.Int64("endpoint-id", endpoint.ID),
+		zap.Strings("new-labels", newLabels),
+		zap.Strings("old-labels", oldLabels),
+	)
 
 	ecr := &models.EndpointChangeRequest{
 		ContainerID:   allocation.ID,
