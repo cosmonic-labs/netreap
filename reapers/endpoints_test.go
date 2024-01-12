@@ -6,15 +6,15 @@ import (
 	"testing"
 
 	"github.com/cilium/cilium/api/v1/models"
-	"github.com/cilium/cilium/pkg/endpoint/id"
-	"github.com/hashicorp/nomad/api"
+	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
+	nomad_api "github.com/hashicorp/nomad/api"
 )
 
 type allocationInfoMock struct {
-	infoFn func(allocID string, q *api.QueryOptions) (*api.Allocation, *api.QueryMeta, error)
+	infoFn func(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error)
 }
 
-func (p *allocationInfoMock) Info(allocID string, q *api.QueryOptions) (*api.Allocation, *api.QueryMeta, error) {
+func (p *allocationInfoMock) Info(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error) {
 	if p != nil && p.infoFn != nil {
 		return p.infoFn(allocID, q)
 	}
@@ -60,12 +60,12 @@ func TestEndpointReconcile(t *testing.T) {
 			},
 		},
 	}
-	allocationOne := &api.Allocation{
+	allocationOne := &nomad_api.Allocation{
 		ID:        "containerID",
 		JobID:     "jobID",
 		Namespace: "namespace",
 		TaskGroup: "taskGroup",
-		Job: &api.Job{
+		Job: &nomad_api.Job{
 			Meta: map[string]string{},
 		},
 	}
@@ -93,7 +93,7 @@ func TestEndpointReconcile(t *testing.T) {
 				},
 			},
 			&allocationInfoMock{
-				infoFn: func(allocID string, q *api.QueryOptions) (*api.Allocation, *api.QueryMeta, error) {
+				infoFn: func(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error) {
 					t.Fatalf("unexpected call to allocation info")
 					return nil, nil, nil
 				},
@@ -107,7 +107,7 @@ func TestEndpointReconcile(t *testing.T) {
 					return []*models.Endpoint{endpointOne}, nil
 				},
 				endpointPatchFn: func(endpointID string, ep *models.EndpointChangeRequest) error {
-					expectedID := id.NewCiliumID(endpointOne.ID)
+					expectedID := endpoint_id.NewCiliumID(endpointOne.ID)
 					expectedContainerID := endpointOne.Status.ExternalIdentifiers.ContainerID
 
 					if endpointID != expectedID {
@@ -126,7 +126,7 @@ func TestEndpointReconcile(t *testing.T) {
 				},
 			},
 			&allocationInfoMock{
-				infoFn: func(allocID string, q *api.QueryOptions) (*api.Allocation, *api.QueryMeta, error) {
+				infoFn: func(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error) {
 					expectedContainerID := endpointOne.Status.ExternalIdentifiers.ContainerID
 					if allocID != expectedContainerID {
 						t.Errorf("wrong container ID passed, expected %v, got %v", expectedContainerID, allocID)
