@@ -8,6 +8,7 @@ require (
 	github.com/hashicorp/consul/api v1.18.0
 	github.com/hashicorp/go-hclog v1.5.0
 	github.com/hashicorp/nomad/api v0.0.0-20230719205936-8d2894699319
+	github.com/sirupsen/logrus v1.9.2
 	github.com/urfave/cli/v2 v2.11.2
 	go.uber.org/zap v1.23.0
 )
@@ -88,7 +89,6 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sasha-s/go-deadlock v0.3.1 // indirect
 	github.com/shirou/gopsutil/v3 v3.23.1 // indirect
-	github.com/sirupsen/logrus v1.9.2 // indirect
 	github.com/spf13/afero v1.9.2 // indirect
 	github.com/spf13/cast v1.5.0 // indirect
 	github.com/spf13/cobra v1.6.1 // indirect

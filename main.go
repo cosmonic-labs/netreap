@@ -3,17 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 
 	cilium_client "github.com/cilium/cilium/pkg/client"
+	cilium_logging "github.com/cilium/cilium/pkg/logging"
 	consul_api "github.com/hashicorp/consul/api"
 	nomad_api "github.com/hashicorp/nomad/api"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 
 	"github.com/cosmonic/netreap/internal/policy"
+	"github.com/cosmonic/netreap/internal/zaplogrus"
 	"github.com/cosmonic/netreap/reapers"
 )
 
@@ -62,6 +65,12 @@ func main() {
 				logger = devlog
 			}
 			zap.ReplaceGlobals(logger)
+
+			// Bridge Cilium logrus to netreap zap
+			cilium_logging.DefaultLogger.SetReportCaller(true)
+			cilium_logging.DefaultLogger.SetOutput(io.Discard)
+			cilium_logging.DefaultLogger.AddHook(zaplogrus.NewZapLogrusHook(logger))
+
 			return nil
 		},
 		Action: func(c *cli.Context) error {
