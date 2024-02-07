@@ -222,8 +222,10 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 		fields := []zap.Field{zap.String("event-type", event.Type),
 			zap.Uint64("event-index", event.Index),
 			zap.String("container-id", allocation.ID),
-			zap.Int64("endpoint-id", endpoint.ID),
 			zap.Error(err),
+		}
+		if endpoint != nil {
+			fields = append(fields, zap.Int64("endpoint-id", endpoint.ID))
 		}
 		if strings.Contains(err.Error(), "getEndpointIdNotFound") {
 			// This is fine, the endpoint probably just isn't on this host
