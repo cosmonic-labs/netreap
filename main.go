@@ -15,9 +15,9 @@ import (
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 
-	"github.com/cosmonic/netreap/internal/policy"
-	"github.com/cosmonic/netreap/internal/zaplogrus"
-	"github.com/cosmonic/netreap/reapers"
+	"github.com/cosmonic-labs/netreap/internal/policy"
+	"github.com/cosmonic-labs/netreap/internal/zaplogrus"
+	"github.com/cosmonic-labs/netreap/reapers"
 )
 
 var Version = "unreleased"

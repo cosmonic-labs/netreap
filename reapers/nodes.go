@@ -12,7 +12,7 @@ import (
 	nomad_api "github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
 
-	"github.com/cosmonic/netreap/elector"
+	"github.com/cosmonic-labs/netreap/elector"
 )
 
 const nodePrefix = "cilium/state/nodes/v1/default/"
