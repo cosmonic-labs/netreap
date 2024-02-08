@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cilium/cilium/pkg/allocator"
+	"github.com/cilium/cilium/pkg/clustermesh/types"
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	cmutils "github.com/cilium/cilium/pkg/clustermesh/utils"
 	"github.com/cilium/cilium/pkg/defaults"
@@ -71,8 +72,8 @@ func startKvstoreWatchdog() {
 		log.WithError(err).Fatal("Unable to initialize kvstore backend for identity garbage collection")
 	}
 
-	minID := idpool.ID(identity.MinimalAllocationIdentity)
-	maxID := idpool.ID(identity.MaximumAllocationIdentity)
+	minID := idpool.ID(identity.GetMinimalAllocationIdentity())
+	maxID := idpool.ID(identity.GetMaximumAllocationIdentity())
 	a := allocator.NewAllocatorForGC(backend, allocator.WithMin(minID), allocator.WithMax(maxID))
 
 	keysToDelete := map[string]kvstore.Value{}
@@ -108,7 +109,9 @@ func startKvstoreWatchdog() {
 			if option.Config.ClusterName != defaults.ClusterName && option.Config.ClusterID != 0 {
 				// The cluster config continues to be enforced also after the initial successful
 				// insertion to prevent issues in case of, e.g., unexpected lease expiration.
-				cfg := cmtypes.CiliumClusterConfig{ID: option.Config.ClusterID}
+				cfg := cmtypes.CiliumClusterConfig{
+					ID:           option.Config.ClusterID,
+					Capabilities: types.CiliumClusterConfigCapabilities{MaxConnectedClusters: option.Config.MaxConnectedClusters}}
 				if err := cmutils.SetClusterConfig(ctx, option.Config.ClusterName, &cfg, kvstore.Client()); err != nil {
 					log.WithError(err).Warning("Unable to set local cluster config")
 				}

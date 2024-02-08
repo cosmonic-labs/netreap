@@ -14,7 +14,14 @@ import (
 	"go.uber.org/zap"
 )
 
-const PoliciesKeyPrefix = "netreap/policies/v1"
+const (
+
+	// PoliciesKeyPrefix is prefix in the kvstore for policies
+	PoliciesKeyPrefix = "netreap/policies/v1"
+
+	// watcherChanSize is the size of the channel to buffer kvstore events
+	watcherChanSize = 100
+)
 
 type PoliciesReaper struct {
 	cilium        PolicyUpdater
@@ -33,7 +40,7 @@ func NewPoliciesReaper(kvStoreClient kvstore.BackendOperations, prefix string, c
 func (p *PoliciesReaper) Run(ctx context.Context) error {
 	zap.L().Info("Synchronizing agent policy state with kvstore")
 
-	watcher := p.kvStoreClient.ListAndWatch(ctx, "netreap-policies", p.prefix, 100)
+	watcher := p.kvStoreClient.ListAndWatch(ctx, p.prefix, watcherChanSize)
 
 	zap.L().Info("Reconciling agent policy state")
 	err := p.reconcile(ctx, watcher)
