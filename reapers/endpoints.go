@@ -2,6 +2,7 @@ package reapers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -78,12 +79,12 @@ func (e *EndpointReaper) Run(ctx context.Context) error {
 
 		case events := <-eventChan:
 			if events.Err != nil {
-				zap.L().Debug("Got error message from allocation event channel", zap.Error(events.Err))
-				return events.Err
-			}
-
-			if events.IsHeartbeat() {
-				continue
+				if _, ok := err.(*json.SyntaxError); ok {
+					zap.L().Debug("Got incorrect event from nomad", zap.Error(events.Err))
+				} else {
+					zap.L().Debug("Got error message from node event channel", zap.Error(events.Err))
+					return err
+				}
 			}
 
 			zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
@@ -203,8 +204,10 @@ func (e *EndpointReaper) handleAllocationUpdated(ctx context.Context, event api.
 		fields := []zap.Field{zap.String("event-type", event.Type),
 			zap.Uint64("event-index", event.Index),
 			zap.String("container-id", allocation.ID),
-			zap.Int64("endpoint-id", endpoint.ID),
 			zap.Error(err),
+		}
+		if endpoint != nil {
+			fields = append(fields, zap.Int64("endpoint-id", endpoint.ID))
 		}
 		if strings.Contains(err.Error(), "getEndpointIdNotFound") {
 			// This is fine, the endpoint probably just isn't on this host
