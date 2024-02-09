@@ -1,4 +1,4 @@
-![netreap-social](https://github.com/cosmonic/netreap/assets/1687902/681901f1-8717-43d3-87e1-311e7a5baf83)
+![netreap-social](https://github.com/cosmonic-labs/netreap/assets/1687902/681901f1-8717-43d3-87e1-311e7a5baf83)
 
 # Netreap
 

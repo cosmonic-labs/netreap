@@ -53,7 +53,7 @@ export function Intro() {
       </p>
       <div className="mt-8 flex flex-wrap justify-center gap-x-1 gap-y-3 sm:gap-x-2 lg:justify-start">
         <IconLink
-          href="https://github.com/cosmonic/netreap"
+          href="https://github.com/cosmonic-labs/netreap"
           icon={GitHubIcon}
           className="flex-none"
         >
