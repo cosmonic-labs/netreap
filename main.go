@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	ciliumClient "github.com/cilium/cilium/pkg/client"
@@ -114,7 +115,8 @@ func configureLogging(debug bool) (logger *zap.Logger, err error) {
 
 func run(ctx context.Context, conf config) error {
 
-	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
+	// Nomad with Docker defaults to SIGTERM for stopping containersq
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	logger, err := configureLogging(conf.debug)
@@ -208,7 +210,20 @@ func run(ctx context.Context, conf config) error {
 		return leaderReapers(ctx, ciliumKvStore.Client(), nomadClient)
 	})
 
-	return egroup.Wait()
+	// Step 4: Wait for go routines to finish
+	egroup.Go(func() error {
+		<-ctx.Done()
+		zap.L().Info("Netreap shutting down")
+		logger.Sync()
+		return ctx.Err()
+	})
+
+	err = egroup.Wait()
+	if err != nil && err != context.Canceled {
+		return err
+	}
+
+	return nil
 }
 
 func leaderReapers(ctx context.Context, kvStoreClient ciliumKvStore.BackendOperations, nomadClient *nomadApi.Client) (err error) {
@@ -230,9 +245,10 @@ func leaderReapers(ctx context.Context, kvStoreClient ciliumKvStore.BackendOpera
 			break
 		}
 
-		zap.S().Debug("Unable to acquire lock, retrying in 5 seconds", zap.Error(err))
-
-		time.Sleep(5 * time.Second)
+		if err != context.Canceled {
+			zap.S().Debug("Unable to acquire lock, retrying in 5 seconds", zap.Error(err))
+			time.Sleep(5 * time.Second)
+		}
 	}
 	defer lock.Unlock(ctx)
 
