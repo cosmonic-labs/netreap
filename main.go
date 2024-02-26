@@ -107,6 +107,8 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		zap.S().Fatal(err)
 	}
+
+	zap.L().Info("netreap is done")
 }
 
 func run(conf config) error {
