@@ -49,25 +49,31 @@ func (p *PoliciesReaper) Run(ctx context.Context) error {
 	}
 
 	zap.L().Info("Keeping agent policy state in sync with kvstore")
-	for event := range watcher.Events {
-		logger := zap.L().With(
-			zap.String("event-key", event.Key),
-			zap.String("event-type", event.Typ.String()),
-		)
 
-		keyName := strings.TrimPrefix(event.Key, p.prefix)
-		if keyName[0] == '/' {
-			keyName = keyName[1:]
-		}
+	for {
+		select {
+		case <-ctx.Done():
+			zap.L().Info("Context cancelled, shutting down policies reaper")
+			return ctx.Err()
 
-		err := p.handlePolicyEvent(logger, keyName, event)
-		if err != nil {
-			logger.Error("Unable to handle policy event", zap.ByteString("event-value", event.Value), zap.Error(err))
-			return err
+		case event := <-watcher.Events:
+			logger := zap.L().With(
+				zap.String("event-key", event.Key),
+				zap.String("event-type", event.Typ.String()),
+			)
+
+			keyName := strings.TrimPrefix(event.Key, p.prefix)
+			if keyName[0] == '/' {
+				keyName = keyName[1:]
+			}
+
+			err := p.handlePolicyEvent(logger, keyName, event)
+			if err != nil {
+				logger.Error("Unable to handle policy event", zap.ByteString("event-value", event.Value), zap.Error(err))
+				return err
+			}
 		}
 	}
-
-	return ctx.Err()
 }
 
 func (p *PoliciesReaper) reconcile(ctx context.Context, watcher *kvstore.Watcher) error {
