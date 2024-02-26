@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/signal"
 	"time"
@@ -27,21 +26,16 @@ var Version = "unreleased"
 const leaderKey = "netreap/leader"
 
 type config struct {
+	debug          bool
 	kvStore        string
 	kvStoreOpts    map[string]string
 	policiesPrefix string
 }
 
 func main() {
+	ctx := context.Background()
+
 	conf := config{}
-	var debug bool
-
-	logger, err := zap.NewProduction()
-	if err != nil {
-		log.Fatalf("can't initialize zap logger: %v", err)
-	}
-	defer logger.Sync()
-
 	app := &cli.App{
 		Name:  "netreap",
 		Usage: "A custom monitor and reaper for cleaning up Cilium endpoints and nodes",
@@ -51,7 +45,7 @@ func main() {
 				Value:       false,
 				Usage:       "Enable debug logging",
 				EnvVars:     []string{"NETREAP_DEBUG"},
-				Destination: &debug,
+				Destination: &conf.debug,
 			},
 			&cli.StringFlag{
 				Name:        "policies-prefix",
@@ -74,20 +68,6 @@ func main() {
 			},
 		},
 		Before: func(ctx *cli.Context) error {
-			if debug {
-				devlog, err := zap.NewDevelopment()
-				if err != nil {
-					return err
-				}
-				logger = devlog
-			}
-			zap.ReplaceGlobals(logger)
-
-			// Bridge Cilium logrus to netreap zap
-			ciliumLogging.DefaultLogger.SetReportCaller(true)
-			ciliumLogging.DefaultLogger.SetOutput(io.Discard)
-			ciliumLogging.DefaultLogger.AddHook(zaplogrus.NewZapLogrusHook(logger))
-
 			// Borrow the parser from Cilium
 			kvStoreOpt := ctx.String("kvstore-opts")
 			if m, err := ciliumCommand.ToStringMapStringE(kvStoreOpt); err != nil {
@@ -99,23 +79,49 @@ func main() {
 			return nil
 		},
 		Action: func(c *cli.Context) error {
-			return run(conf)
+			return run(c.Context, conf)
 		},
 		Version: Version,
 	}
 
-	if err := app.Run(os.Args); err != nil {
-		zap.S().Fatal(err)
+	if err := app.RunContext(ctx, os.Args); err != nil {
+		zap.L().Fatal("Error running netreap", zap.Error(err))
 	}
-
-	zap.L().Info("netreap is done")
 }
 
-func run(conf config) error {
+func configureLogging(debug bool) (logger *zap.Logger, err error) {
+	// Step 0: Setup logging
 
-	// Step -1: Interrupt handling
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	if debug {
+		logger, err = zap.NewDevelopment()
+	} else {
+		logger, err = zap.NewProduction()
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	zap.ReplaceGlobals(logger)
+
+	// Bridge Cilium logrus to netreap zap
+	ciliumLogging.DefaultLogger.SetReportCaller(true)
+	ciliumLogging.DefaultLogger.SetOutput(io.Discard)
+	ciliumLogging.DefaultLogger.AddHook(zaplogrus.NewZapLogrusHook(logger))
+
+	return logger, nil
+}
+
+func run(ctx context.Context, conf config) error {
+
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
+	defer cancel()
+
+	logger, err := configureLogging(conf.debug)
+	if err != nil {
+		return fmt.Errorf("can't initialize zap logger: %v", err)
+	}
+	defer logger.Sync()
 
 	// Step 0: Construct the clients
 
