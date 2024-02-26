@@ -11,7 +11,7 @@ import (
 
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/endpoint/id"
-	"github.com/cosmonic/netreap/internal/netreap"
+	"github.com/cosmonic-labs/netreap/internal/netreap"
 	"github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
 

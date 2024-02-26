@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cosmonic/netreap/internal/netreap"
+	"github.com/cosmonic-labs/netreap/internal/netreap"
 
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/labels"

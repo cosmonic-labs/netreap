@@ -18,8 +18,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/cosmonic/netreap/internal/zaplogrus"
-	"github.com/cosmonic/netreap/reapers"
+	"github.com/cosmonic-labs/netreap/internal/zaplogrus"
+	"github.com/cosmonic-labs/netreap/reapers"
 )
 
 var Version = "unreleased"

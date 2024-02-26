@@ -1,4 +1,4 @@
-module github.com/cosmonic/netreap
+module github.com/cosmonic-labs/netreap
 
 go 1.21.0
 
