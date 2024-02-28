@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	ciliumClient "github.com/cilium/cilium/pkg/client"
 	ciliumCommand "github.com/cilium/cilium/pkg/command"
@@ -23,8 +22,6 @@ import (
 )
 
 var Version = "unreleased"
-
-const leaderKey = "netreap/leader"
 
 type config struct {
 	debug          bool
@@ -184,7 +181,7 @@ func run(ctx context.Context, conf config) error {
 		return fmt.Errorf("unable to get local node ID")
 	}
 
-	// Step 2: Start per-node reapers
+	// Step 2: Start the reapers
 	egroup, ctx := errgroup.WithContext(ctx)
 
 	zap.S().Debug("Starting endpoint reaper")
@@ -205,77 +202,15 @@ func run(ctx context.Context, conf config) error {
 		return policiesReaper.Run(ctx)
 	})
 
-	// Step 3: Start leader only reapers
-	egroup.Go(func() error {
-		return leaderReapers(ctx, ciliumKvStore.Client(), nomadClient)
-	})
-
-	// Step 4: Wait for go routines to finish
-	egroup.Go(func() error {
-		<-ctx.Done()
-		zap.L().Info("Netreap shutting down")
-		logger.Sync()
-		return ctx.Err()
-	})
-
-	err = egroup.Wait()
-	if err != nil && err != context.Canceled {
-		return err
-	}
-
-	return nil
-}
-
-func leaderReapers(ctx context.Context, kvStoreClient ciliumKvStore.BackendOperations, nomadClient *nomadApi.Client) (err error) {
-	allocID := os.Getenv("NOMAD_ALLOC_ID")
-
-	zap.L().Info("Waiting for leader election")
-
-	var lock ciliumKvStore.KVLocker
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		lock, err = kvStoreClient.LockPath(ctx, leaderKey)
-		if err == nil {
-			break
-		}
-
-		if err != context.Canceled {
-			zap.S().Debug("Unable to acquire lock, retrying in 5 seconds", zap.Error(err))
-			time.Sleep(5 * time.Second)
-		}
-	}
-	defer lock.Unlock(ctx)
-
-	zap.S().Info("Throne seized, starting leader functions")
-
-	modified, err := kvStoreClient.UpdateIfDifferentIfLocked(ctx, leaderKey, []byte(allocID), false, lock)
-	if err != nil {
-		zap.S().Warn("Unable to update leader key with allocID", zap.Error(err))
-	}
-
-	if !modified {
-		zap.S().Warn("Was already leader?", zap.Error(err))
-	}
-
-	zap.S().Debug("Starting kvstore watchdog")
-	reapers.StartKvstoreWatchdog()
-
 	zap.S().Debug("Starting node reaper")
-	nodeReaper, err := reapers.NewNodeReaper(kvStoreClient, nomadClient)
+	nodeReaper, err := reapers.NewNodeReaper(ciliumKvStore.Client(), nomadClient.Nodes(), nomadClient.EventStream(), os.Getenv("NOMAD_ALLOC_ID"))
 	if err != nil {
 		return err
 	}
+	egroup.Go(func() error {
+		return nodeReaper.Run(ctx)
+	})
 
-	if err := nodeReaper.Run(ctx); err != nil {
-		zap.L().Error("Unable to start node reaper", zap.Error(err))
-		return err
-	}
-
-	return nil
+	// Step 4: Wait interrupt or go routine error
+	return egroup.Wait()
 }

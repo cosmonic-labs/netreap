@@ -9,6 +9,7 @@ import (
 
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/node/types"
+	"github.com/cosmonic-labs/netreap/elector"
 	"github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
 )
@@ -16,16 +17,20 @@ import (
 const nodePrefix = "cilium/state/nodes/v1/default/"
 
 type NodeReaper struct {
-	kvStoreClient kvstore.BackendOperations
-	nomad         *api.Client
+	allocID          string
+	kvStoreClient    kvstore.BackendOperations
+	nomadNodeInfo    NodeInfo
+	nomadEventStream EventStreamer
 }
 
 // NewNodeReaper creates a new NodeReaper. This will run an initial reconciliation before returning the
 // reaper
-func NewNodeReaper(kvStoreClient kvstore.BackendOperations, nomadClient *api.Client) (*NodeReaper, error) {
+func NewNodeReaper(kvStoreClient kvstore.BackendOperations, nomadNodeInfo NodeInfo, nomadEventStream EventStreamer, allocID string) (*NodeReaper, error) {
 	reaper := NodeReaper{
-		kvStoreClient: kvStoreClient,
-		nomad:         nomadClient,
+		allocID:          allocID,
+		kvStoreClient:    kvStoreClient,
+		nomadNodeInfo:    nomadNodeInfo,
+		nomadEventStream: nomadEventStream,
 	}
 
 	return &reaper, nil
@@ -44,7 +49,7 @@ func (n *NodeReaper) Run(ctx context.Context) error {
 	// NOTE: Specifying uint max so that it starts from the next available index. If there is a
 	// better way to start from latest index, we can change this
 	queryOptions := &api.QueryOptions{Namespace: "*"}
-	eventChan, err := n.nomad.EventStream().Stream(
+	eventChan, err := n.nomadEventStream.Stream(
 		ctx,
 		map[api.Topic][]string{
 			api.TopicNode: {"*"},
@@ -55,6 +60,19 @@ func (n *NodeReaper) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("error when starting node event stream: %s", err)
 	}
+
+	// Leader election
+	election, err := elector.New(ctx, n.kvStoreClient, n.allocID)
+	if err != nil {
+		zap.L().Error("Unable to set up leader election for node reaper", zap.Error(err))
+		return err
+	}
+	zap.L().Info("Waiting for leader election")
+	<-election.SeizeThrone()
+	zap.L().Info("Elected as leader, starting node reaping")
+	defer election.StepDown()
+
+	go startKvstoreWatchdog()
 
 	tick := time.NewTicker(time.Hour)
 	defer tick.Stop()
@@ -116,7 +134,7 @@ func (n *NodeReaper) reconcile(ctx context.Context) error {
 
 	zap.L().Debug("Getting nomad node list")
 	queryOptions := api.QueryOptions{}
-	nodes, _, err := n.nomad.Nodes().List(queryOptions.WithContext(ctx))
+	nodes, _, err := n.nomadNodeInfo.List(queryOptions.WithContext(ctx))
 	if err != nil {
 		return fmt.Errorf("unable to list nodes: %s", err)
 	}

@@ -3,6 +3,7 @@ package reapers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -79,12 +80,14 @@ func (e *EndpointReaper) Run(ctx context.Context) error {
 
 		case events := <-eventChan:
 			if events.Err != nil {
-				if _, ok := err.(*json.SyntaxError); ok {
-					zap.L().Debug("Got incorrect event from nomad", zap.Error(events.Err))
-				} else {
-					zap.L().Debug("Got error message from node event channel", zap.Error(events.Err))
-					return err
+				var jsonErr *json.SyntaxError
+				if errors.As(events.Err, &jsonErr) {
+					zap.L().Warn("Ignoring invalid events payload from Nomad", zap.Error(jsonErr))
+					break
 				}
+
+				zap.L().Error("Received error from Nomad event stream, exiting", zap.Error(events.Err))
+				return err
 			}
 
 			zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
@@ -95,7 +98,6 @@ func (e *EndpointReaper) Run(ctx context.Context) error {
 					go e.handleAllocationUpdated(ctx, event)
 				default:
 					zap.L().Debug("Ignoring unhandled event from Allocation topic", zap.String("event-type", event.Type))
-					continue
 				}
 			}
 		}

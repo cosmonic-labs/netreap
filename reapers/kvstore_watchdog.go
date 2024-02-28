@@ -3,7 +3,6 @@
 //
 // Local changes:
 // - package renamed from `cmd` to `reapers`
-// - function `StartKvstoreWatchdog` to export function `startKvstoreWatchdog`
 
 package reapers
 
@@ -121,8 +120,4 @@ func startKvstoreWatchdog() {
 			<-hbTimer.After(kvstore.HeartbeatWriteInterval)
 		}
 	}()
-}
-
-func StartKvstoreWatchdog() {
-	startKvstoreWatchdog()
 }
