@@ -83,11 +83,11 @@ func (e *EndpointReaper) Run(ctx context.Context) error {
 				var jsonErr *json.SyntaxError
 				if errors.As(events.Err, &jsonErr) {
 					zap.L().Warn("Ignoring invalid events payload from Nomad", zap.Error(jsonErr))
-					break
+					continue
+				} else {
+					zap.L().Error("Received error from Nomad event stream, exiting", zap.Error(events.Err))
+					return err
 				}
-
-				zap.L().Error("Received error from Nomad event stream, exiting", zap.Error(events.Err))
-				return err
 			}
 
 			zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
@@ -308,6 +308,8 @@ func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *ap
 		Labels:                   newLabels,
 		State:                    models.EndpointStateWaitingDashForDashIdentity.Pointer(),
 		DisableLegacyIdentifiers: true,
+		K8sPodName:               allocation.Name,
+		K8sNamespace:             allocation.Namespace,
 	}
 
 	f := func() error {

@@ -2,8 +2,12 @@ package reapers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/cilium/cilium/api/v1/models"
 	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
@@ -19,6 +23,17 @@ func (p *allocationInfoMock) Info(allocID string, q *nomad_api.QueryOptions) (*n
 		return p.infoFn(allocID, q)
 	}
 	return nil, nil, nil
+}
+
+type eventStreamerMock struct {
+	streamFn func(ctx context.Context, topics map[nomad_api.Topic][]string, index uint64, q *nomad_api.QueryOptions) (<-chan *nomad_api.Events, error)
+}
+
+func (p *eventStreamerMock) Stream(ctx context.Context, topics map[nomad_api.Topic][]string, index uint64, q *nomad_api.QueryOptions) (<-chan *nomad_api.Events, error) {
+	if p != nil && p.streamFn != nil {
+		return p.streamFn(ctx, topics, index, q)
+	}
+	return nil, nil
 }
 
 type endpointUpdaterMock struct {
@@ -156,4 +171,92 @@ func TestEndpointReconcile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEndpointRunErrorHandling(t *testing.T) {
+	cilium := &endpointUpdaterMock{
+		endpointListFn: func() ([]*models.Endpoint, error) {
+			return []*models.Endpoint{}, nil
+		},
+		endpointPatchFn: func(id string, ep *models.EndpointChangeRequest) error {
+			t.Fatalf("unexpected call to patch endpoint")
+			return nil
+		},
+	}
+
+	nomad := &allocationInfoMock{
+		infoFn: func(allocID string, q *nomad_api.QueryOptions) (*nomad_api.Allocation, *nomad_api.QueryMeta, error) {
+			t.Fatalf("unexpected call to allocation info")
+			return nil, nil, nil
+		},
+	}
+
+	events := make(chan *nomad_api.Events, 4)
+
+	nomadEventStream := &eventStreamerMock{
+		streamFn: func(ctx context.Context, topics map[nomad_api.Topic][]string, index uint64, q *nomad_api.QueryOptions) (<-chan *nomad_api.Events, error) {
+
+			// Should ignore this event and continue
+			events <- &nomad_api.Events{
+				Index: 1,
+				Err: &json.SyntaxError{
+					Offset: 0,
+				},
+			}
+
+			// One normal event
+			events <- &nomad_api.Events{
+				Index: 2,
+				Err:   nil,
+				Events: []nomad_api.Event{
+					{
+						Topic: nomad_api.TopicAllocation,
+						Type:  "AllocationUpdated",
+					},
+				},
+			}
+
+			// Should exit at this point with the returned error
+			events <- &nomad_api.Events{
+				Index: 3,
+				Err:   fmt.Errorf("fatal error"),
+			}
+
+			// This event will not be consumed as the routine should exit
+			events <- &nomad_api.Events{
+				Index: 4,
+				Err:   nil,
+				Events: []nomad_api.Event{
+					{
+						Topic: nomad_api.TopicAllocation,
+						Type:  "AllocationUpdated",
+					},
+				},
+			}
+
+			return events, nil
+		},
+	}
+
+	reaper, err := NewEndpointReaper(cilium, nomad, nomadEventStream, "NodeID")
+	if err != nil {
+		t.Fatalf("unexpected error creating poller %v", err)
+	}
+
+	g, ctx := errgroup.WithContext(context.Background())
+
+	g.Go(func() error {
+		return reaper.Run(ctx)
+	})
+
+	_ = g.Wait()
+
+	event := <-events
+
+	if event == nil {
+		t.Fatalf("expected left over event but got <nil>")
+	}
+
+	close(events)
+
 }
