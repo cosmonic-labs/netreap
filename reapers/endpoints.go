@@ -2,7 +2,6 @@ package reapers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -47,7 +46,6 @@ func NewEndpointReaper(ciliumClient EndpointUpdater, nomadAllocations Allocation
 // blocking and will only return errors if something occurs during startup
 // return a channel to notify of consul client failures
 func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
-
 	// NOTE: Specifying uint max so that it starts from the next available index. If there is a
 	// better way to start from latest index, we can change this
 	eventChan, err := e.nomadEventStream.Stream(
@@ -84,13 +82,9 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 
 			case events := <-eventChan:
 				if events.Err != nil {
-					if _, ok := err.(*json.SyntaxError); ok {
-						zap.L().Debug("Got incorrect event from nomad", zap.Error(events.Err))
-					} else {
-						zap.L().Debug("Got error message from node event channel", zap.Error(events.Err))
-						failChan <- true
-						return
-					}
+					zap.L().Error("Received error from Nomad event stream, exiting", zap.Error(events.Err))
+					failChan <- true
+					return
 				}
 
 				zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
@@ -135,7 +129,7 @@ func (e *EndpointReaper) reconcile() error {
 
 		// Nomad calls the CNI plugin with the allocation ID as the container ID
 		allocation, _, err := e.nomadAllocations.Info(containerID, &nomad_api.QueryOptions{Namespace: "*"})
-		if err != nil {
+		if allocation == nil || err != nil {
 			zap.L().Warn("Couldn't fetch allocation from Nomad",
 				zap.String("container-id", containerID),
 				zap.Int64("endpoint-id", endpoint.ID),
@@ -144,21 +138,7 @@ func (e *EndpointReaper) reconcile() error {
 			continue
 		}
 
-		if allocation != nil {
-			zap.L().Debug("Patching labels on endpoint",
-				zap.String("container-id", containerID),
-				zap.Int64("endpoint-id", endpoint.ID),
-				zap.Error(err),
-			)
-
-			e.labelEndpoint(endpoint, allocation)
-		} else {
-			zap.L().Debug("Skipping endpoint as allocation not in Nomad",
-				zap.String("container-id", containerID),
-				zap.Int64("endpoint-id", endpoint.ID),
-				zap.Error(err),
-			)
-		}
+		e.labelEndpoint(endpoint, allocation)
 	}
 
 	zap.L().Debug("Finished reconciliation")
@@ -215,7 +195,7 @@ func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 		return
 	}
 
-	endpoint, err := e.cilium.EndpointGet(endpoint_id.NewID(endpoint_id.ContainerIdPrefix, allocation.ID))
+	endpoint, err := e.cilium.EndpointGet(endpoint_id.NewCNIAttachmentID(allocation.ID, allocation.NetworkStatus.InterfaceName))
 	if err != nil {
 		fields := []zap.Field{zap.String("event-type", event.Type),
 			zap.Uint64("event-index", event.Index),
@@ -316,10 +296,13 @@ func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *no
 	)
 
 	ecr := &models.EndpointChangeRequest{
-		ContainerID:   allocation.ID,
-		ContainerName: allocation.Name,
-		Labels:        newLabels,
-		State:         models.EndpointStateWaitingDashForDashIdentity.Pointer(),
+		ContainerID:              allocation.ID,
+		ContainerName:            allocation.Name,
+		Labels:                   newLabels,
+		State:                    models.EndpointStateWaitingDashForDashIdentity.Pointer(),
+		DisableLegacyIdentifiers: true,
+		K8sPodName:               allocation.Name,
+		K8sNamespace:             allocation.Namespace,
 	}
 
 	f := func() error {

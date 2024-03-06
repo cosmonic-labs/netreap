@@ -4,18 +4,17 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/signal"
 
 	cilium_client "github.com/cilium/cilium/pkg/client"
+	cilium_command "github.com/cilium/cilium/pkg/command"
+	cilium_kvstore "github.com/cilium/cilium/pkg/kvstore"
 	cilium_logging "github.com/cilium/cilium/pkg/logging"
-	consul_api "github.com/hashicorp/consul/api"
 	nomad_api "github.com/hashicorp/nomad/api"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 
-	"github.com/cosmonic-labs/netreap/internal/policy"
 	"github.com/cosmonic-labs/netreap/internal/zaplogrus"
 	"github.com/cosmonic-labs/netreap/reapers"
 )
@@ -23,19 +22,16 @@ import (
 var Version = "unreleased"
 
 type config struct {
-	policyKey string
+	debug          bool
+	kvStore        string
+	kvStoreOpts    map[string]string
+	policiesPrefix string
 }
 
 func main() {
+	ctx := context.Background()
+
 	conf := config{}
-	var debug bool
-
-	logger, err := zap.NewProduction()
-	if err != nil {
-		log.Fatalf("can't initialize zap logger: %v", err)
-	}
-	defer logger.Sync()
-
 	app := &cli.App{
 		Name:  "netreap",
 		Usage: "A custom monitor and reaper for cleaning up Cilium endpoints and nodes",
@@ -45,56 +41,115 @@ func main() {
 				Value:       false,
 				Usage:       "Enable debug logging",
 				EnvVars:     []string{"NETREAP_DEBUG"},
-				Destination: &debug,
+				Destination: &conf.debug,
 			},
 			&cli.StringFlag{
-				Name:        "policy-key",
-				Aliases:     []string{"k"},
-				Value:       policy.PolicyKeyDefault,
+				Name:        "policies-prefix",
+				Aliases:     []string{"p"},
+				Value:       reapers.PoliciesKeyPrefix,
+				Usage:       "kvstore key prefix to watch for Cilium policy updates.",
+				EnvVars:     []string{"NETREAP_POLICIES_PREFIX"},
+				Destination: &conf.policiesPrefix,
+			},
+			&cli.StringFlag{
+				Name:        "kvstore",
 				Usage:       "Consul key to watch for Cilium policy updates.",
-				EnvVars:     []string{"NETREAP_POLICY_KEY"},
-				Destination: &conf.policyKey,
+				EnvVars:     []string{"NETREAP_KVSTORE"},
+				Destination: &conf.kvStore,
+			},
+			&cli.StringFlag{
+				Name:    "kvstore-opts",
+				Usage:   "Consul key to watch for Cilium policy updates.",
+				EnvVars: []string{"NETREAP_KVSTORE_OPTS"},
 			},
 		},
 		Before: func(ctx *cli.Context) error {
-			if debug {
-				devlog, err := zap.NewDevelopment()
-				if err != nil {
-					return err
-				}
-				logger = devlog
+			// Borrow the parser from Cilium
+			kvStoreOpt := ctx.String("kvstore-opts")
+			if m, err := cilium_command.ToStringMapStringE(kvStoreOpt); err != nil {
+				return fmt.Errorf("unable to parse %s: %w", kvStoreOpt, err)
+			} else {
+				conf.kvStoreOpts = m
 			}
-			zap.ReplaceGlobals(logger)
-
-			// Bridge Cilium logrus to netreap zap
-			cilium_logging.DefaultLogger.SetReportCaller(true)
-			cilium_logging.DefaultLogger.SetOutput(io.Discard)
-			cilium_logging.DefaultLogger.AddHook(zaplogrus.NewZapLogrusHook(logger))
 
 			return nil
 		},
 		Action: func(c *cli.Context) error {
-			return run(conf)
+			return run(c.Context, conf)
 		},
 		Version: Version,
 	}
 
-	if err := app.Run(os.Args); err != nil {
-		zap.S().Fatal(err)
+	if err := app.RunContext(ctx, os.Args); err != nil {
+		zap.L().Fatal("Error running netreap", zap.Error(err))
 	}
 }
 
-func run(conf config) error {
-	// Step 0: Construct clients
-	consul_client, err := consul_api.NewClient(consul_api.DefaultConfig())
-	if err != nil {
-		return fmt.Errorf("unable to connect to Consul: %s", err)
+func configureLogging(debug bool) (logger *zap.Logger, err error) {
+	// Step 0: Setup logging
+
+	if debug {
+		logger, err = zap.NewDevelopment()
+	} else {
+		logger, err = zap.NewProduction()
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	zap.ReplaceGlobals(logger)
+
+	// Bridge Cilium logrus to netreap zap
+	cilium_logging.DefaultLogger.SetReportCaller(true)
+	cilium_logging.DefaultLogger.SetOutput(io.Discard)
+	cilium_logging.DefaultLogger.AddHook(zaplogrus.NewZapLogrusHook(logger))
+
+	return logger, nil
+}
+
+func run(ctx context.Context, conf config) error {
+
+	logger, err := configureLogging(conf.debug)
+	if err != nil {
+		return fmt.Errorf("can't initialize zap logger: %v", err)
+	}
+	defer logger.Sync()
+
+	// Step 0: Construct the clients
 
 	// Looks for the default Cilium socket path or uses the value from CILIUM_SOCK
 	cilium_client, err := cilium_client.NewDefaultClient()
 	if err != nil {
 		return fmt.Errorf("error when connecting to cilium agent: %s", err)
+	}
+
+	// Fetch kvstore config from Cilium if not set
+	if conf.kvStore == "" || len(conf.kvStoreOpts) == 0 {
+		resp, err := cilium_client.ConfigGet()
+		if err != nil {
+			return fmt.Errorf("unable to retrieve cilium configuration: %s", err)
+		}
+		if resp.Status == nil {
+			return fmt.Errorf("unable to retrieve cilium configuration: empty response")
+		}
+
+		cfgStatus := resp.Status
+
+		if conf.kvStore == "" {
+			conf.kvStore = cfgStatus.KvstoreConfiguration.Type
+		}
+
+		if len(conf.kvStoreOpts) == 0 {
+			for k, v := range cfgStatus.KvstoreConfiguration.Options {
+				conf.kvStoreOpts[k] = v
+			}
+		}
+	}
+
+	err = cilium_kvstore.Setup(ctx, conf.kvStore, conf.kvStoreOpts, nil)
+	if err != nil {
+		return fmt.Errorf("unable to connect to Cilium kvstore: %s", err)
 	}
 
 	// DefaultConfig fetches configuration data from well-known nomad variables (e.g. NOMAD_ADDR,
@@ -104,6 +159,7 @@ func run(conf config) error {
 		return fmt.Errorf("unable to connect to Nomad: %s", err)
 	}
 
+	// Get the node ID of the instance we're running on
 	self, err := nomad_client.Agent().Self()
 	if err != nil {
 		return fmt.Errorf("unable to query local agent info: %s", err)
@@ -126,8 +182,8 @@ func run(conf config) error {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 
-	zap.S().Debug("Starting node reaper")
-	node_reaper, err := reapers.NewNodeReaper(ctx, nomad_client, consul_client)
+	zap.L().Debug("Starting node reaper")
+	node_reaper, err := reapers.NewNodeReaper(ctx, cilium_kvstore.Client(), nomad_client.Nodes(), nomad_client.EventStream(), os.Getenv("NOMAD_ALLOC_ID"))
 	if err != nil {
 		return err
 	}
@@ -137,26 +193,20 @@ func run(conf config) error {
 		return fmt.Errorf("unable to start node reaper: %s", err)
 	}
 
-	zap.S().Debug("Starting endpoint reaper")
+	// Step 2: Start the reapers
+	zap.L().Debug("Starting endpoint reaper")
 	endpoint_reaper, err := reapers.NewEndpointReaper(cilium_client, nomad_client.Allocations(), nomad_client.EventStream(), nodeID)
 	if err != nil {
 		return err
 	}
-
 	endpointFailChan, err := endpoint_reaper.Run(ctx)
-	if err != nil {
-		return fmt.Errorf("unable to start endpoint reaper: %s", err)
-	}
 
-	zap.S().Debug("starting policy poller")
-	poller, err := policy.NewPoller(consul_client, conf.policyKey)
+	zap.S().Debug("Starting policies reaper")
+	policies_reaper, err := reapers.NewPoliciesReaper(cilium_kvstore.Client(), conf.policiesPrefix, cilium_client)
 	if err != nil {
 		return err
 	}
-
-	if err := poller.Run(ctx); err != nil {
-		return fmt.Errorf("unable to start policy poller: %w", err)
-	}
+	policiesFailChan, err := policies_reaper.Run(ctx)
 
 	// Wait for interrupt or client failure
 	select {
@@ -167,7 +217,10 @@ func run(conf config) error {
 		zap.S().Error("nomad node reaper client failed, shutting down")
 		cancel()
 	case <-endpointFailChan:
-		zap.S().Error("endpoint reaper consul client failed, shutting down")
+		zap.S().Error("endpoint reaper kvstore client failed, shutting down")
+		cancel()
+	case <-policiesFailChan:
+		zap.S().Error("policies reaper kvstore client failed, shutting down")
 		cancel()
 	}
 

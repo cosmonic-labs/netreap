@@ -2,47 +2,35 @@ package elector
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	"github.com/hashicorp/consul/api"
-	"github.com/hashicorp/consul/api/watch"
+	ciliumKvStore "github.com/cilium/cilium/pkg/kvstore"
+
 	"go.uber.org/zap"
 )
 
 const keyName = "service/netreaper/leader"
-const ttl = "30s"
 
 // Elector is a helper type for performing and managing leader election
 type Elector struct {
-	ctx           context.Context
-	client        *api.Client
-	sessionID     string
-	isLeader      bool
-	stopWatchFunc func()
-	lockAcquired  chan struct{}
-	tryAgain      chan struct{}
+	ctx          context.Context
+	client       ciliumKvStore.BackendOperations
+	lock         ciliumKvStore.KVLocker
+	lockAcquired chan struct{}
+	clientID     []byte
 }
 
 // New returns a fully initialized Elector that can be used to obtain leader election
-func New(ctx context.Context, client *api.Client) (*Elector, error) {
-	sessionID, _, err := client.Session().Create(&api.SessionEntry{Name: "netreap", TTL: ttl}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("unable to start leader election: %s", err)
-	}
-
+func New(ctx context.Context, client ciliumKvStore.BackendOperations, clientID string) (*Elector, error) {
 	elector := Elector{
 		ctx:          ctx,
 		client:       client,
-		sessionID:    sessionID,
-		isLeader:     false,
 		lockAcquired: make(chan struct{}),
-		tryAgain:     make(chan struct{}),
+		clientID:     []byte(clientID),
 	}
 
-	go elector.autoRenewSession()
 	go elector.pollLock()
-	go elector.startKeyWatch()
+
 	return &elector, nil
 }
 
@@ -53,123 +41,89 @@ func (e *Elector) SeizeThrone() <-chan struct{} {
 }
 
 // StepDown gracefully steps down as the leader (retiring to the country side to till the earth like
-// a virtuous Roman citizen). This should generally be called with `defer` once the Elector is
-// created so that it can step down
+// a virtuous Roman citizen). This should be called with `defer` once the Elector is
+// created so that it can step down cleanly
 func (e *Elector) StepDown() {
+	zap.L().Debug("Attempting to release leader lock")
+
 	// If this is called during normal cleanup, we don't need to release
-	if !e.isLeader {
+	if !e.IsLeader() {
 		return
 	}
 
-	acquired, _, err := e.client.KV().Release(&api.KVPair{
-		Key:     keyName,
-		Value:   []byte{},
-		Session: e.sessionID,
-	}, nil)
-	if err != nil || !acquired {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := e.lock.Unlock(ctx)
+	if err != nil {
 		// Just log an error if this happens and default to false
-		zap.S().Warnf("Unable to run release against Consul: %s", err)
+		zap.L().Warn("Unable to run release lock", zap.Error(err))
 		return
 	}
-	e.isLeader = false
-	// Theoretically, someone could call this function outside of cleanup, so let's just be safe and
-	// restart the pollLock function
-	go e.pollLock()
+
+	e.lock = nil
 }
 
 // IsLeader returns true if this node is currently the leader
 func (e *Elector) IsLeader() bool {
-	return e.isLeader
+	return e.lock != nil
 }
 
 func (e *Elector) acquire() bool {
-	acquired, _, err := e.client.KV().Acquire(&api.KVPair{
-		Key: keyName,
-		// NOTE: If we want to, we can add actual data here
-		Value:   []byte{},
-		Session: e.sessionID,
-	}, nil)
+	zap.L().Debug("Attempting to acquire leader lock")
+
+	lock, err := e.client.LockPath(e.ctx, keyName)
 	if err != nil {
-		// Just log an error if this happens and default to false
-		zap.S().Errorf("Unable to run acquire against Consul: %s", err)
+
+		// Cilium has a Hint() function that turns useful errors in to strings for some cases
+		// So we have to check for the string to be able to ignore timeouts for logging purposes
+		if err.Error() != "etcd client timeout exceeded" {
+			// Just log an error if this happens and default to false
+			zap.L().Error("Unable to run acquire against kvstore", zap.Error(err))
+		}
+
 		return false
 	}
-	return acquired
-}
 
-func (e *Elector) acquireRetry(num_retries uint) bool {
-	// Wait to try again until the timer goes off. Per the docs for leader election, there should be
-	// a timed wait before retries.
+	e.lock = lock
 
-	// First thing, just try to acquire
-	if e.acquire() {
-		return true
+	modified, err := e.client.UpdateIfDifferentIfLocked(e.ctx, keyName, e.clientID, false, e.lock)
+	if err != nil {
+		zap.L().Warn("Unable to update leader key with allocID", zap.Error(err))
 	}
-	zap.S().Debugf("Unable to acquire lock. Retrying up to %d times", num_retries)
-	for i := 0; i < int(num_retries); i++ {
-		timer := time.NewTimer(10 * time.Second)
-		<-timer.C
-		if e.acquire() {
-			return true
-		}
-		zap.S().Debugf("Lock retry %d did not succeed", i+1)
+
+	if !modified {
+		zap.L().Warn("Was already leader?", zap.Error(err))
 	}
-	zap.S().Debug("Never acquired lock after retry")
-	return false
+
+	return true
 }
 
 func (e *Elector) pollLock() {
 	// When first called, try to get a lock. If we don't, start waiting
 	if e.acquire() {
 		e.lockAcquired <- struct{}{}
-		e.isLeader = true
 		// We're leader, so no need to wait
 		return
 	}
+
+	tick := time.NewTicker(15 * time.Second)
+	defer tick.Stop()
+
 	for {
 		select {
+
 		case <-e.ctx.Done():
-			zap.S().Info("Received shutdown signal, stopping lock acquisition loop")
+			zap.L().Info("Received shutdown signal, stopping lock acquisition loop")
 			return
-		case <-e.tryAgain:
-			if e.acquireRetry(6) {
+
+		case <-tick.C:
+			if e.acquire() {
 				e.lockAcquired <- struct{}{}
-				e.isLeader = true
 				// We're leader, so no need to wait
 				return
 			}
+			zap.L().Debug("Unable to acquire leader lock")
 		}
 	}
-}
-
-func (e *Elector) autoRenewSession() {
-	go e.client.Session().RenewPeriodic(ttl, e.sessionID, nil, e.ctx.Done())
-}
-
-func (e *Elector) startKeyWatch() error {
-	params := map[string]interface{}{
-		"type": "key",
-		"key":  keyName,
-	}
-	plan, err := watch.Parse(params)
-	if err != nil {
-		panic(fmt.Errorf("the watch plan should compile, this is programmer error: %s", err))
-	}
-
-	plan.Handler = func(index uint64, data interface{}) {
-		if data != nil {
-			pair, ok := data.(*api.KVPair)
-			if !ok {
-				zap.S().Errorf("Unable to parse data as KVPair, got type %T", data)
-				return
-			}
-			if pair.Session == "" {
-				e.tryAgain <- struct{}{}
-			}
-		}
-	}
-
-	e.stopWatchFunc = plan.Stop
-
-	return plan.RunWithClientAndHclog(e.client, nil)
 }

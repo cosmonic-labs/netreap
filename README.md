@@ -4,9 +4,9 @@
 
 Netreap is a non-Kubernetes-based tool for handling Cilium across a cluster,
 similar to the functionality of [Cilium
-Operator](https://docs.cilium.io/en/v1.13/internals/cilium_operator/#cilium-operator-internals).
+Operator](https://docs.cilium.io/en/v1.15/internals/cilium_operator/#cilium-operator-internals).
 It was originally designed just to reap orphaned Cilium
-[Endpoints](https://docs.cilium.io/en/v1.13/gettingstarted/terminology/#endpoints),
+[Endpoints](https://docs.cilium.io/en/v1.15/gettingstarted/terminology/#endpoints),
 hence the name of `Netreap`. But we loved the name so much we kept it even
 though it does more than reaping.
 
@@ -29,9 +29,9 @@ that Netreap uses leader election, so multiple copies can (and should) be run.
 
 #### Requirements
 
-* A Consul cluster or server
+* A kvstore cluster supported by Cilium, currently one of etcd or Consul
 * A running Nomad cluster
-* Cilium 1.12.x or 1.13.x
+* Cilium 1.15.x or higher
   * You will also need to install the [CNI
     plugins](https://github.com/containernetworking/plugins/releases/tag/v1.2.0)
     alongside Cilium
@@ -236,8 +236,10 @@ clients are available to Netreap.
 
 | Flag                   | Env Var               | Default                       | Description                                                                                                   |
 | ---------------------- | --------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `--debug`              | `NETREAP_DEBUG`       | `false`                       | Turns on debug logging                                                                                        |
-| `--policy-key`         | `NETREAP_POLICY_KEY`  | `netreap.io/policy`           | Consul key that Netreap watches for changes to the Cilium policy JSON value |
+| `--debug`              | `NETREAP_DEBUG`           | `false`               | Turns on debug logging                                                                                        |
+| `--policies-prefix`    | `NETREAP_POLICIES_PREFIX` | `netreap/policies/v1` | kvstore prefix that Netreap watches for changes to the Cilium policies JSON value |
+| `--kvstore`            | `NETREAP_KVSTORE`         |                       | Key-value store type, same expected values as Cilium |
+| `--kvstore-opts`       | `NETREAP_KVSTORE_OPTS`    |                       | Key-value store options e.g. etcd.address=127.0.0.1:4001 |
 
 Please note that to configure the Nomad, Consul and Cilium clients that Netreap uses,
 we leverage the well defined environment variables for
@@ -265,10 +267,10 @@ Whenever you want to update policies in your cluster, simply set the key in
 Consul:
 
 ```bash
-consul kv put netreap.io/policy @policy.json
+consul kv put netreap/policies/v1/policy @policy.json
 ```
 
-Netreap automatically picks up any updates to the value and updates the policy
+Netreap automatically picks up any updates to the keys and updates the policy
 on every node where it is running.
 
 ## Development

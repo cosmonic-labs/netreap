@@ -32,3 +32,25 @@ type EndpointUpdater interface {
 	EndpointGetter
 	EndpointPatcher
 }
+
+type NodeInfo interface {
+	List(q *nomad_api.QueryOptions) ([]*nomad_api.NodeListStub, *nomad_api.QueryMeta, error)
+}
+
+type PolicyGetter interface {
+	PolicyGet(labels []string) (*models.Policy, error)
+}
+
+type PolicyReplacer interface {
+	PolicyReplace(policyJSON string, replace bool, replaceWithLabels []string) (*models.Policy, error)
+}
+
+type PolicyDeleter interface {
+	PolicyDelete(labels []string) (*models.Policy, error)
+}
+
+type PolicyUpdater interface {
+	PolicyGetter
+	PolicyReplacer
+	PolicyDeleter
+}
