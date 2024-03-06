@@ -2,8 +2,6 @@ package reapers
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -84,15 +82,9 @@ func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 
 			case events := <-eventChan:
 				if events.Err != nil {
-					var jsonErr *json.SyntaxError
-					if errors.As(events.Err, &jsonErr) {
-						zap.L().Warn("Ignoring invalid events payload from Nomad", zap.Error(jsonErr))
-						continue
-					} else {
-						zap.L().Error("Received error from Nomad event stream, exiting", zap.Error(events.Err))
-						failChan <- true
-						return
-					}
+					zap.L().Error("Received error from Nomad event stream, exiting", zap.Error(events.Err))
+					failChan <- true
+					return
 				}
 
 				zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))

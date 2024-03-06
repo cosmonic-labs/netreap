@@ -2,7 +2,6 @@ package reapers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -190,22 +189,14 @@ func TestEndpointRunErrorHandling(t *testing.T) {
 		},
 	}
 
-	events := make(chan *nomad_api.Events, 4)
+	events := make(chan *nomad_api.Events, 3)
 
 	nomadEventStream := &eventStreamerMock{
 		streamFn: func(ctx context.Context, topics map[nomad_api.Topic][]string, index uint64, q *nomad_api.QueryOptions) (<-chan *nomad_api.Events, error) {
 
-			// Should ignore this event and continue
-			events <- &nomad_api.Events{
-				Index: 1,
-				Err: &json.SyntaxError{
-					Offset: 0,
-				},
-			}
-
 			// One normal event
 			events <- &nomad_api.Events{
-				Index: 2,
+				Index: 1,
 				Err:   nil,
 				Events: []nomad_api.Event{
 					{
@@ -217,13 +208,13 @@ func TestEndpointRunErrorHandling(t *testing.T) {
 
 			// Should exit at this point with the returned error
 			events <- &nomad_api.Events{
-				Index: 3,
+				Index: 2,
 				Err:   fmt.Errorf("fatal error"),
 			}
 
 			// This event will not be consumed as the routine should exit
 			events <- &nomad_api.Events{
-				Index: 4,
+				Index: 3,
 				Err:   nil,
 				Events: []nomad_api.Event{
 					{
