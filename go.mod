@@ -11,7 +11,6 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli/v2 v2.11.2
 	go.uber.org/zap v1.26.0
-	golang.org/x/sync v0.5.0
 )
 
 require (
@@ -125,6 +124,7 @@ require (
 	golang.org/x/exp v0.0.0-20231206192017-f3f8817b8deb // indirect
 	golang.org/x/net v0.19.0 // indirect
 	golang.org/x/oauth2 v0.15.0 // indirect
+	golang.org/x/sync v0.5.0 // indirect
 	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/term v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect

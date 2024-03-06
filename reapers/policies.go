@@ -37,43 +37,51 @@ func NewPoliciesReaper(kvStoreClient kvstore.BackendOperations, prefix string, c
 	}, nil
 }
 
-func (p *PoliciesReaper) Run(ctx context.Context) error {
-	zap.L().Info("Synchronizing agent policy state with kvstore")
-
-	watcher := p.kvStoreClient.ListAndWatch(ctx, p.prefix, watcherChanSize)
-
-	zap.L().Info("Reconciling agent policy state")
-	err := p.reconcile(ctx, watcher)
-	if err != nil {
-		return err
-	}
-
+func (p *PoliciesReaper) Run(ctx context.Context) (<-chan bool, error) {
 	zap.L().Info("Keeping agent policy state in sync with kvstore")
 
-	for {
-		select {
-		case <-ctx.Done():
-			zap.L().Info("Context cancelled, shutting down policies reaper")
-			return ctx.Err()
+	failChan := make(chan bool, 1)
 
-		case event := <-watcher.Events:
-			logger := zap.L().With(
-				zap.String("event-key", event.Key),
-				zap.String("event-type", event.Typ.String()),
-			)
+	go func() {
+		watcher := p.kvStoreClient.ListAndWatch(ctx, p.prefix, watcherChanSize)
 
-			keyName := strings.TrimPrefix(event.Key, p.prefix)
-			if keyName[0] == '/' {
-				keyName = keyName[1:]
-			}
+		zap.L().Info("Synchronizing agent policy state with kvstore")
 
-			err := p.handlePolicyEvent(logger, keyName, event)
-			if err != nil {
-				logger.Error("Unable to handle policy event", zap.ByteString("event-value", event.Value), zap.Error(err))
-				return err
+		err := p.reconcile(ctx, watcher)
+		if err != nil {
+			zap.L().Error("Unable to reconcile initial policies", zap.Error(err))
+			failChan <- true
+			return
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				zap.L().Info("Context cancelled, shutting down policies reaper")
+				return
+
+			case event := <-watcher.Events:
+				logger := zap.L().With(
+					zap.String("event-key", event.Key),
+					zap.String("event-type", event.Typ.String()),
+				)
+
+				keyName := strings.TrimPrefix(event.Key, p.prefix)
+				if keyName[0] == '/' {
+					keyName = keyName[1:]
+				}
+
+				err := p.handlePolicyEvent(logger, keyName, event)
+				if err != nil {
+					logger.Error("Unable to handle policy event", zap.ByteString("event-value", event.Value), zap.Error(err))
+					failChan <- true
+					return
+				}
 			}
 		}
-	}
+	}()
+
+	return failChan, nil
 }
 
 func (p *PoliciesReaper) reconcile(ctx context.Context, watcher *kvstore.Watcher) error {

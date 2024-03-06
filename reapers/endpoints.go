@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/cilium/cilium/api/v1/models"
-	"github.com/cilium/cilium/pkg/endpoint/id"
+	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
 	"github.com/cosmonic-labs/netreap/internal/netreap"
-	"github.com/hashicorp/nomad/api"
+	nomad_api "github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
 
 	backoff "github.com/cenkalti/backoff/v4"
@@ -36,75 +36,84 @@ func NewEndpointReaper(ciliumClient EndpointUpdater, nomadAllocations Allocation
 		nodeID:           nodeID,
 	}
 
+	// Do the initial reconciliation loop
+	if err := reaper.reconcile(); err != nil {
+		return nil, fmt.Errorf("unable to perform initial reconciliation: %s", err)
+	}
+
 	return &reaper, nil
 }
 
 // Run the reaper until the context given in the contructor is cancelled. This function is non
 // blocking and will only return errors if something occurs during startup
 // return a channel to notify of consul client failures
-func (e *EndpointReaper) Run(ctx context.Context) error {
-	// Do the initial reconciliation loop
-	if err := e.reconcile(ctx); err != nil {
-		return fmt.Errorf("unable to perform initial reconciliation: %s", err)
-	}
-
+func (e *EndpointReaper) Run(ctx context.Context) (<-chan bool, error) {
 	// NOTE: Specifying uint max so that it starts from the next available index. If there is a
 	// better way to start from latest index, we can change this
-	queryOptions := &api.QueryOptions{Namespace: "*"}
 	eventChan, err := e.nomadEventStream.Stream(
 		ctx,
-		map[api.Topic][]string{
-			api.TopicAllocation: {"*"},
+		map[nomad_api.Topic][]string{
+			nomad_api.TopicAllocation: {"*"},
 		},
 		math.MaxInt64,
-		queryOptions.WithContext(ctx),
+		&nomad_api.QueryOptions{
+			Namespace: "*",
+		},
 	)
 	if err != nil {
-		return fmt.Errorf("error when starting node event stream: %s", err)
+		return nil, fmt.Errorf("error when starting node event stream: %s", err)
 	}
 
-	tick := time.NewTicker(time.Hour)
-	defer tick.Stop()
+	failChan := make(chan bool, 1)
 
-	for {
-		select {
-		case <-ctx.Done():
-			zap.L().Info("Context cancelled, shutting down endpoint reaper")
-			return ctx.Err()
+	go func() {
+		tick := time.NewTicker(time.Hour)
+		defer tick.Stop()
 
-		case <-tick.C:
-			zap.L().Info("Periodic reconciliation loop started")
-			if err := e.reconcile(ctx); err != nil {
-				zap.L().Error("Error occurred during reconcilation, will retry next loop", zap.Error(err))
-			}
+		for {
+			select {
+			case <-ctx.Done():
+				zap.L().Info("Context cancelled, shutting down endpoint reaper")
+				return
 
-		case events := <-eventChan:
-			if events.Err != nil {
-				var jsonErr *json.SyntaxError
-				if errors.As(events.Err, &jsonErr) {
-					zap.L().Warn("Ignoring invalid events payload from Nomad", zap.Error(jsonErr))
-					continue
-				} else {
-					zap.L().Error("Received error from Nomad event stream, exiting", zap.Error(events.Err))
-					return err
+			case <-tick.C:
+				zap.L().Info("Periodic reconciliation loop started")
+				if err := e.reconcile(); err != nil {
+					zap.L().Error("Error occurred during reconcilation, will retry next loop", zap.Error(err))
 				}
-			}
 
-			zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
+			case events := <-eventChan:
+				if events.Err != nil {
+					var jsonErr *json.SyntaxError
+					if errors.As(events.Err, &jsonErr) {
+						zap.L().Warn("Ignoring invalid events payload from Nomad", zap.Error(jsonErr))
+						continue
+					} else {
+						zap.L().Error("Received error from Nomad event stream, exiting", zap.Error(events.Err))
+						failChan <- true
+						return
+					}
+				}
 
-			for _, event := range events.Events {
-				switch event.Type {
-				case "AllocationUpdated":
-					go e.handleAllocationUpdated(ctx, event)
-				default:
-					zap.L().Debug("Ignoring unhandled event from Allocation topic", zap.String("event-type", event.Type))
+				zap.L().Debug("Got events from Allocation topic. Handling...", zap.Int("event-count", len(events.Events)))
+
+				for _, event := range events.Events {
+					switch event.Type {
+					case "AllocationUpdated":
+						go e.handleAllocationUpdated(event)
+					default:
+						zap.L().Debug("Ignoring unhandled event from Allocation topic", zap.String("event-type", event.Type))
+						continue
+					}
 				}
 			}
 		}
-	}
+	}()
+
+	return failChan, nil
 }
 
-func (e *EndpointReaper) reconcile(ctx context.Context) error {
+func (e *EndpointReaper) reconcile() error {
 	zap.L().Debug("Starting reconciliation")
 
 	// Get current endpoints list
@@ -116,35 +125,28 @@ func (e *EndpointReaper) reconcile(ctx context.Context) error {
 	zap.L().Debug("checking each endpoint", zap.Int("endpoints-total", len(endpoints)))
 
 	for _, endpoint := range endpoints {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		containerID := endpoint.Status.ExternalIdentifiers.ContainerID
 
-		default:
-			containerID := endpoint.Status.ExternalIdentifiers.ContainerID
-
-			// Only managing endpoints with container IDs
-			if containerID == "" {
-				zap.L().Debug("Skipping endpoint that is not associated with a container",
-					zap.Int64("endpoint-id", endpoint.ID),
-				)
-				continue
-			}
-
-			// Nomad calls the CNI plugin with the allocation ID as the container ID
-			queryOptions := &api.QueryOptions{Namespace: "*"}
-			allocation, _, err := e.nomadAllocations.Info(containerID, queryOptions.WithContext(ctx))
-			if allocation == nil || err != nil {
-				zap.L().Warn("Couldn't fetch allocation from Nomad",
-					zap.String("container-id", containerID),
-					zap.Int64("endpoint-id", endpoint.ID),
-					zap.Error(err),
-				)
-				continue
-			}
-
-			e.labelEndpoint(endpoint, allocation)
+		// Only managing endpoints with container IDs
+		if containerID == "" {
+			zap.L().Debug("Skipping endpoint that is not associated with a container",
+				zap.Int64("endpoint-id", endpoint.ID),
+			)
+			continue
 		}
+
+		// Nomad calls the CNI plugin with the allocation ID as the container ID
+		allocation, _, err := e.nomadAllocations.Info(containerID, &nomad_api.QueryOptions{Namespace: "*"})
+		if allocation == nil || err != nil {
+			zap.L().Warn("Couldn't fetch allocation from Nomad",
+				zap.String("container-id", containerID),
+				zap.Int64("endpoint-id", endpoint.ID),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		e.labelEndpoint(endpoint, allocation)
 	}
 
 	zap.L().Debug("Finished reconciliation")
@@ -152,7 +154,7 @@ func (e *EndpointReaper) reconcile(ctx context.Context) error {
 	return nil
 }
 
-func (e *EndpointReaper) handleAllocationUpdated(ctx context.Context, event api.Event) {
+func (e *EndpointReaper) handleAllocationUpdated(event nomad_api.Event) {
 	allocation, err := event.Allocation()
 	if err != nil {
 		zap.L().Debug("Unable to deserialize Allocation",
@@ -201,7 +203,7 @@ func (e *EndpointReaper) handleAllocationUpdated(ctx context.Context, event api.
 		return
 	}
 
-	endpoint, err := e.cilium.EndpointGet(id.NewCNIAttachmentID(allocation.ID, allocation.NetworkStatus.InterfaceName))
+	endpoint, err := e.cilium.EndpointGet(endpoint_id.NewCNIAttachmentID(allocation.ID, allocation.NetworkStatus.InterfaceName))
 	if err != nil {
 		fields := []zap.Field{zap.String("event-type", event.Type),
 			zap.Uint64("event-index", event.Index),
@@ -222,8 +224,7 @@ func (e *EndpointReaper) handleAllocationUpdated(ctx context.Context, event api.
 
 	if allocation.Job == nil {
 		// Fetch the full allocation since the event didn't have the Job with the metadata
-		queryOptions := &api.QueryOptions{Namespace: allocation.Namespace}
-		allocation, _, err = e.nomadAllocations.Info(allocation.ID, queryOptions.WithContext(ctx))
+		allocation, _, err = e.nomadAllocations.Info(allocation.ID, &nomad_api.QueryOptions{Namespace: allocation.Namespace})
 		if err != nil {
 			zap.L().Warn("Couldn't fetch allocation from Nomad",
 				zap.String("event-type", event.Type),
@@ -257,7 +258,7 @@ func stringArrayEqual(left []string, right []string) bool {
 	return true
 }
 
-func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *api.Allocation) {
+func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *nomad_api.Allocation) {
 	newLabels := models.Labels{fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadJobID, allocation.JobID)}
 	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadNamespace, allocation.Namespace))
 	newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNetreap, netreap.LabelKeyNomadTaskGroupID, allocation.TaskGroup))
@@ -313,7 +314,7 @@ func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *ap
 	}
 
 	f := func() error {
-		err := e.cilium.EndpointPatch(id.NewCiliumID(endpoint.ID), ecr)
+		err := e.cilium.EndpointPatch(endpoint_id.NewCiliumID(endpoint.ID), ecr)
 		if err != nil {
 			// The Cilium client endpoints pass errors through Hint() that does fmt.Errorf to all errors without wrapping
 			// so we have to treat them as strings

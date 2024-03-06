@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
-
-	"golang.org/x/sync/errgroup"
+	"time"
 
 	"github.com/cilium/cilium/api/v1/models"
 	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
@@ -161,7 +160,7 @@ func TestEndpointReconcile(t *testing.T) {
 				t.Fatalf("unexpected error creating poller %v", err)
 			}
 
-			err = reaper.reconcile(context.TODO())
+			err = reaper.reconcile()
 
 			if tt.shouldErr && err == nil {
 				t.Error("expected error but got <nil>")
@@ -243,18 +242,22 @@ func TestEndpointRunErrorHandling(t *testing.T) {
 		t.Fatalf("unexpected error creating poller %v", err)
 	}
 
-	g, ctx := errgroup.WithContext(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
 
-	g.Go(func() error {
-		return reaper.Run(ctx)
-	})
-
-	_ = g.Wait()
+	failChan, err := reaper.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error running endpoint reaper %v", err)
+	}
 
 	event := <-events
-
 	if event == nil {
 		t.Fatalf("expected left over event but got <nil>")
+	}
+
+	fail := <-failChan
+	if !fail {
+		t.Fatalf("expected fail but got <false>")
 	}
 
 	close(events)
