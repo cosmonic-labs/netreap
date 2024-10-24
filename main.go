@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 
 	cilium_client "github.com/cilium/cilium/pkg/client"
 	cilium_logging "github.com/cilium/cilium/pkg/logging"
@@ -15,6 +16,7 @@ import (
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 
+	"github.com/cosmonic-labs/netreap/internal/netreap"
 	"github.com/cosmonic-labs/netreap/internal/policy"
 	"github.com/cosmonic-labs/netreap/internal/zaplogrus"
 	"github.com/cosmonic-labs/netreap/reapers"
@@ -23,7 +25,8 @@ import (
 var Version = "unreleased"
 
 type config struct {
-	policyKey string
+	policyKey     string
+	ignoredLabels string
 }
 
 func main() {
@@ -54,6 +57,14 @@ func main() {
 				Usage:       "Consul key to watch for Cilium policy updates.",
 				EnvVars:     []string{"NETREAP_POLICY_KEY"},
 				Destination: &conf.policyKey,
+			},
+			&cli.StringFlag{
+				Name:        "ignore-nomad-meta-labels",
+				Aliases:     []string{"i"},
+				Value:       "",
+				Usage:       "List of ignored labels collected from Nomad's job metainfo.",
+				EnvVars:     []string{"NETREAP_IGNORED_META_LABELS"},
+				Destination: &conf.ignoredLabels,
 			},
 		},
 		Before: func(ctx *cli.Context) error {
@@ -137,8 +148,9 @@ func run(conf config) error {
 		return fmt.Errorf("unable to start node reaper: %s", err)
 	}
 
+	nomadIgnoredLables := netreap.IgnoredLabels{IgnoreMeta: strings.Split(conf.ignoredLabels, ",")}
 	zap.S().Debug("Starting endpoint reaper")
-	endpoint_reaper, err := reapers.NewEndpointReaper(cilium_client, nomad_client.Allocations(), nomad_client.EventStream(), nodeID)
+	endpoint_reaper, err := reapers.NewEndpointReaper(cilium_client, nomad_client.Allocations(), nomad_client.EventStream(), nodeID, nomadIgnoredLables)
 	if err != nil {
 		return err
 	}

@@ -234,10 +234,11 @@ clients are available to Netreap.
 
 ### Configuring
 
-| Flag                   | Env Var               | Default                       | Description                                                                                                   |
-| ---------------------- | --------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `--debug`              | `NETREAP_DEBUG`       | `false`                       | Turns on debug logging                                                                                        |
-| `--policy-key`         | `NETREAP_POLICY_KEY`  | `netreap.io/policy`           | Consul key that Netreap watches for changes to the Cilium policy JSON value |
+| Flag                         | Env Var                        | Default                       | Description                                                                                                   |
+| ---------------------------- | ------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `--debug`                    | `NETREAP_DEBUG`                | `false`                       | Turns on debug logging                                                                                        |
+| `--policy-key`               | `NETREAP_POLICY_KEY`           | `netreap.io/policy`           | Consul key that Netreap watches for changes to the Cilium policy JSON value                                   |
+| `--ignore-nomad-meta-labels` | `NETREAP_IGNORED_META_LABELS`  | `""`                          | Comma-separated list of Nomad's job metadata that not will be passed to Cilium Endpoint labels                |
 
 Please note that to configure the Nomad, Consul and Cilium clients that Netreap uses,
 we leverage the well defined environment variables for

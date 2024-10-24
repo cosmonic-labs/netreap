@@ -31,3 +31,7 @@ const (
 var (
 	LabelCiliumPolicyName = LabelKeyCiliumPolicyName + "." + LabelSourceNetreap
 )
+
+type IgnoredLabels struct {
+	IgnoreMeta []string
+}

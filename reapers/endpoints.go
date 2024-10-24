@@ -14,6 +14,7 @@ import (
 	"github.com/cosmonic-labs/netreap/internal/netreap"
 	nomad_api "github.com/hashicorp/nomad/api"
 	"go.uber.org/zap"
+	"golang.org/x/exp/slices"
 
 	backoff "github.com/cenkalti/backoff/v4"
 )
@@ -23,16 +24,18 @@ type EndpointReaper struct {
 	nomadAllocations AllocationInfo
 	nomadEventStream EventStreamer
 	nodeID           string
+	ignoredLabels    netreap.IgnoredLabels
 }
 
 // NewEndpointReaper creates a new EndpointReaper. This will run an initial reconciliation before
 // returning the reaper
-func NewEndpointReaper(ciliumClient EndpointUpdater, nomadAllocations AllocationInfo, nomadEventStream EventStreamer, nodeID string) (*EndpointReaper, error) {
+func NewEndpointReaper(ciliumClient EndpointUpdater, nomadAllocations AllocationInfo, nomadEventStream EventStreamer, nodeID string, ignoredLabels netreap.IgnoredLabels) (*EndpointReaper, error) {
 	reaper := EndpointReaper{
 		cilium:           ciliumClient,
 		nomadAllocations: nomadAllocations,
 		nomadEventStream: nomadEventStream,
 		nodeID:           nodeID,
+		ignoredLabels:    ignoredLabels,
 	}
 
 	// Do the initial reconciliation loop
@@ -290,7 +293,9 @@ func (e *EndpointReaper) labelEndpoint(endpoint *models.Endpoint, allocation *no
 	}
 
 	for k, v := range metadata {
-		newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNomad, k, v))
+		if !slices.Contains(e.ignoredLabels.IgnoreMeta, k) {
+			newLabels = append(newLabels, fmt.Sprintf("%s:%s=%s", netreap.LabelSourceNomad, k, v))
+		}
 	}
 
 	oldLabels := models.Labels{}

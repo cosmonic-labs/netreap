@@ -6,6 +6,7 @@ import (
 
 	"github.com/cilium/cilium/api/v1/models"
 	endpoint_id "github.com/cilium/cilium/pkg/endpoint/id"
+	"github.com/cosmonic-labs/netreap/internal/netreap"
 	nomad_api "github.com/hashicorp/nomad/api"
 )
 
@@ -140,7 +141,7 @@ func TestEndpointReconcile(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			reaper, err := NewEndpointReaper(tt.cilium, tt.nomadAllocations, nil, "")
+			reaper, err := NewEndpointReaper(tt.cilium, tt.nomadAllocations, nil, "", netreap.IgnoredLabels{})
 			if err != nil {
 				t.Fatalf("unexpected error creating poller %v", err)
 			}
