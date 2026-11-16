@@ -40,7 +40,7 @@ func NewNodeReaper(ctx context.Context, nomad_client *nomad_api.Client, consul_c
 func (n *NodeReaper) Run() (<-chan bool, error) {
 	// NOTE: Specifying uint max so that it starts from the next available index. If there is a
 	// better way to start from latest index, we can change this
-	eventChan, err := n.nomad.EventStream().Stream(n.ctx, map[nomad_api.Topic][]string{nomad_api.TopicNode: {}}, math.MaxInt64, nil)
+	eventChan, err := n.nomad.EventStream().Stream(n.ctx, map[nomad_api.Topic][]string{nomad_api.TopicNode: {"*"}}, math.MaxInt64, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error when starting node event stream: %s", err)
 	}
